@@ -27,24 +27,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: install dependencies (ubuntu only)
+      - name: Install dependencies (Ubuntu only)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libmpv-dev
 
-      - name: install mpv (macOS only)
+      - name: Install mpv (macOS only)
         if: matrix.platform == 'macos-latest'
         run: |
           brew install mpv
+          # Debug: Verify libmpv.dylib location
+          find /opt/homebrew/lib -name "libmpv*.dylib" -ls || find /usr/local/lib -name "libmpv*.dylib" -ls || echo "libmpv.dylib not found"
 
-      - name: setup node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
           cache: 'npm'
 
-      - name: install Rust stable
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
@@ -54,19 +56,20 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
-      - name: install frontend dependencies
+      - name: Install frontend dependencies
         run: yarn install
 
       - name: Download and copy libmpv-2.dll
+        shell: bash # Ensure consistent shell across platforms
         run: |
-          # Download the DLL
+          # Download libmpv-2.dll
           curl -L -o libmpv-2.dll http://cautioned.co/libmpv-2.dll
           
           # Set source directory
           mkdir -p src-tauri/lib/64
           mv libmpv-2.dll src-tauri/lib/64/
           
-          # Copy to all necessary locations
+          # Copy to all necessary locations (mimicking Windows script)
           echo "Copying libmpv-2.dll to all necessary locations..."
           cp src-tauri/lib/64/libmpv-2.dll src-tauri/libmpv-2.dll
           cp src-tauri/lib/64/libmpv-2.dll libmpv-2.dll
@@ -75,7 +78,14 @@ jobs:
           cp src-tauri/lib/64/libmpv-2.dll src-tauri/target/debug/libmpv-2.dll
           cp src-tauri/lib/64/libmpv-2.dll src-tauri/target/release/libmpv-2.dll
 
-      - uses: tauri-apps/tauri-action@v0
+      - name: Build CSS for templates
+        run: |
+          cd src-tauri/templates
+          npm run build:css
+          cd ../..
+
+      - name: Build and publish with Tauri
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
