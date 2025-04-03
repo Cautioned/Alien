@@ -1,0 +1,19 @@
+{
+  "name": "alien",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "tauri": "tauri",
+    "start-server": "node server.js",
+    "dev": "npm run tauri dev",
+    "build": "npm run tauri build",
+    "release": "npm run tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  },
+  "dependencies": {
+    "@tauri-apps/plugin-shell": "^2.2.0",
+    "express": "^4.21.2"
+  }
+}
