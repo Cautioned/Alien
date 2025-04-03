@@ -52,11 +52,29 @@ jobs:
       - name: install frontend dependencies
         run: yarn install
 
-      - name: Download libmpv-2.dll
+      - name: Download and copy libmpv-2.dll
         run: |
+          # Download the DLL
           curl -L -o libmpv-2.dll http://cautioned.co/libmpv-2.dll
+          
+          # Set source directory
           mkdir -p src-tauri/lib/64
           mv libmpv-2.dll src-tauri/lib/64/
+          
+          # Copy to all necessary locations (mimicking Windows script)
+          echo "Copying libmpv-2.dll to all necessary locations..."
+          
+          # Copy to src-tauri directory
+          cp src-tauri/lib/64/libmpv-2.dll src-tauri/libmpv-2.dll
+          
+          # Copy to root directory
+          cp src-tauri/lib/64/libmpv-2.dll libmpv-2.dll
+          
+          # Copy to debug and release directories
+          mkdir -p src-tauri/target/debug
+          mkdir -p src-tauri/target/release
+          cp src-tauri/lib/64/libmpv-2.dll src-tauri/target/debug/libmpv-2.dll
+          cp src-tauri/lib/64/libmpv-2.dll src-tauri/target/release/libmpv-2.dll
 
       - uses: tauri-apps/tauri-action@v0
         env:
