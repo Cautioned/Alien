@@ -13,7 +13,7 @@ A video synchronization tool for animation reference. This tool allows you to sy
 
 ### Windows
 
-1. Download the latest release from the [releases page](https://github.com/yourusername/alien/releases)
+1. Download the latest release from the [releases page](https://github.com/cautioned/alien/releases/latest)
 2. Run the installer
 3. The app will automatically install required dependencies
 
