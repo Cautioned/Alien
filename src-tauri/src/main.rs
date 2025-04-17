@@ -20,6 +20,7 @@ use tauri::WebviewUrl;
 use portpicker::pick_unused_port;
 use once_cell::sync::Lazy;
 use tower_http::services::ServeDir;
+use std::path::{PathBuf, Path as StdPath};
 
 struct AppState {
     player: Arc<MpvPlayer>,
@@ -684,20 +685,54 @@ async fn get_loop(
     })))
 }
 
+// --- Start: Restore find_templates_dir helper ---
+fn find_templates_dir() -> PathBuf {
+    // Executable directory
+    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.to_path_buf()));
+    // Current working directory
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // Cargo manifest dir (compile‑time)
+    const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
+
+    // Build list of candidate paths
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    // dev paths
+    candidates.push(StdPath::new(MANIFEST_DIR).join("src-tauri/templates"));
+    candidates.push(StdPath::new(MANIFEST_DIR).join("templates"));
+    candidates.push(cwd.join("src-tauri/templates"));
+    candidates.push(cwd.join("templates"));
+    // production paths (resources next to exe, or inside Resources on macOS)
+    if let Some(ref dir) = exe_dir {
+        candidates.push(dir.join("../Resources/templates")); // macOS bundle structure
+        candidates.push(dir.join("resources/templates")); // Other platforms
+        candidates.push(dir.join("templates")); // Fallback if directly next to exe
+    }
+
+    // First path that exists wins
+    for p in &candidates {
+        if p.exists() {
+            println!("Using templates directory: {:?}", p);
+            return p.clone();
+        }
+    }
+
+    // Fallback if nothing found
+    let fallback = cwd.join("src-tauri/templates"); // Should ideally not be reached in prod
+    println!("Templates directory not found in expected locations, falling back to {:?}", fallback);
+    fallback
+}
+// --- End: Restore find_templates_dir helper ---
+
 #[tokio::main]
 async fn main() {
     let (player, _exit_receiver) = MpvPlayer::new().expect("Failed to initialize MPV player");
     let player = Arc::new(player);
 
-    // Try port 3000 first, fallback to random port if not available
+    // Determine port
     let port = match tokio::net::TcpListener::bind(("0.0.0.0", 3000)).await {
-        Ok(listener) => {
-            drop(listener); // Close the test listener
-            3000
-        }
+        Ok(listener) => { drop(listener); 3000 }
         Err(_) => pick_unused_port().expect("No ports available"),
     };
-    
     let url = format!("http://localhost:{}", port);
 
     let app_state = Arc::new(AppState {
@@ -705,6 +740,11 @@ async fn main() {
         port,
         last_seek: Arc::new(AtomicU64::new(0)),
     });
+
+    // --- Start: Use find_templates_dir for static path ---
+    let static_path = find_templates_dir();
+    println!("Axum will serve static files from: {:?}", static_path);
+    // --- End: Use find_templates_dir for static path ---
 
     // Set up the Axum server
     let app = Router::new()
@@ -720,7 +760,7 @@ async fn main() {
         .route("/playback/loop", post(set_loop))
         .route("/status", get(get_connection_status))
         .route("/", get(status_page))
-        .nest_service("/static", ServeDir::new("templates"))
+        .nest_service("/static", ServeDir::new(static_path))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -730,7 +770,7 @@ async fn main() {
         .with_state(app_state.clone());
 
     // Start the server in a separate task
-    let server_handle = tokio::spawn({
+    let server_handle = tokio::spawn({ 
         let app = app.clone();
         let url = url.clone(); // Clone url before the move
         async move {
@@ -754,10 +794,10 @@ async fn main() {
         .plugin(tauri_plugin_http::init())
         .manage(app_state.clone())
         .invoke_handler(tauri::generate_handler![sync_room, exit_app])
-        .setup(move |app| {
+        .setup(move |app_handle| {
             // Create the main window that points to our server
             let window = tauri::WebviewWindowBuilder::new(
-                app,
+                app_handle,
                 "main", // the unique window label
                 WebviewUrl::External(url.parse().unwrap())
             )
@@ -776,7 +816,7 @@ async fn main() {
                         window_clone.close().unwrap();
                         break;
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    std::thread::sleep(Duration::from_millis(100));
                 }
             });
 
