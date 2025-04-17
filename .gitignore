@@ -1,0 +1,73 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependencies
+node_modules
+/.pnp
+.pnp.js
+
+# Build outputs
+/dist
+/dist-ssr
+/build
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Tauri build outputs
+/src-tauri/target
+/src-tauri/gen/schemas
+/src-tauri/templates/dist/
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Debug files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+/coverage
+
+# Optional
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+.vscode
+
+# Large media files and binaries
+*.mp4
+*.dll
+*.exe
+*.dylib
+*.so
+*.lib
+# Specific large files exceeding GitHub limits
+src-tauri/lib/64/libmpv-2.dll
+src-tauri/libmpv-2.dll
+src-tauri/libmpv-2.lib
+
+# OS files
+Thumbs.db
+Desktop.ini
