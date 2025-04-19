@@ -4,7 +4,6 @@
   "version": "0.1.0",
   "scripts": {
     "tauri": "tauri",
-    "start-server": "node server.js",
     "dev": "npm run tauri dev",
     "build": "npm run tauri build",
     "release": "npm run tauri build"
@@ -14,6 +13,6 @@
   },
   "dependencies": {
     "@tauri-apps/plugin-shell": "^2.2.0",
-    "express": "^4.21.2"
+    "tauri": "^0.15.0"
   }
 }

@@ -1,3 +1,59 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer components {
+  .card {
+    @apply bg-gray-900 bg-opacity-75 backdrop-blur-sm p-4 sm:p-6 rounded-lg shadow-lg border border-gray-700/50;
+  }
+  .card-header {
+    @apply text-lg sm:text-xl font-semibold text-gray-200 mb-4;
+  }
+  .input {
+    @apply bg-gray-800/75 rounded px-4 py-3 text-gray-200 border border-transparent focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 placeholder-gray-500 transition-colors duration-150;
+  }
+  .input.input-invalid {
+    @apply border-red-500 focus:ring-red-500 focus:border-red-500;
+  }
+  .btn {
+    @apply px-5 py-3 rounded font-medium transition-all duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-black disabled:opacity-60 disabled:cursor-not-allowed text-sm sm:text-base;
+  }
+  .btn-green {
+    @apply bg-green-600 text-white hover:bg-green-700 focus:ring-green-500;
+  }
+  .btn-orange {
+    @apply bg-green-700 text-white hover:bg-green-800 focus:ring-green-600;
+  }
+  .btn-red {
+    @apply bg-red-700 text-white hover:bg-red-800 focus:ring-red-600;
+  }
+  .btn-gray {
+    @apply bg-gray-600 text-white hover:bg-gray-700 focus:ring-gray-500;
+  }
+  /* Combined Outline + Color */
+  .btn-outline {
+    @apply bg-transparent border hover:bg-opacity-10 focus:ring-offset-black;
+  }
+  .btn-outline.btn-red {
+    @apply border-red-600 text-red-500 hover:bg-red-600 hover:bg-opacity-100 hover:text-white focus:ring-red-500;
+  }
+   /* Add other outline color combos if needed, e.g., btn-outline btn-green */
+
+  .btn-toggle {
+    @apply px-3 py-1 rounded text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-700 transition-colors duration-150;
+  }
+  .btn-toggle.active {
+    @apply bg-green-600 text-white font-medium cursor-default hover:bg-green-600;
+  }
+
+  .keyboard-shortcut {
+    @apply inline-block bg-gray-600 text-gray-200 px-2 py-0.5 rounded border border-gray-500 text-xs font-mono shadow-sm;
+  }
+  .code-block {
+    @apply bg-gray-800/60 text-green-400 px-1.5 py-0.5 rounded text-xs font-mono;
+  }
+  .status-badge {
+    @apply py-1 px-3 rounded-full text-sm font-medium text-white;
+    /* Specific colors handled by direct class add/remove in JS */
+  }
+}

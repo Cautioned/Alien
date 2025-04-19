@@ -11,21 +11,102 @@ use axum::{
     Router,
 };
 use mpv::MpvPlayer;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::time::{interval, MissedTickBehavior};
 use tower_http::cors::{Any, CorsLayer};
-use tauri::WebviewUrl;
+use tauri::{AppHandle, Manager, WebviewUrl};
 use portpicker::pick_unused_port;
 use once_cell::sync::Lazy;
 use tower_http::services::ServeDir;
 use std::path::{PathBuf, Path as StdPath};
+use std::net::TcpListener;
+use serde_json::Value as JsonValue;
+use std::collections::HashSet;
+
+// --- Configuration Handling --- 
+const CONFIG_FILE_NAME: &str = "alien_config.json";
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct AppConfig {
+    port: Option<u16>,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        AppConfig { port: None }
+    }
+}
+
+fn get_config_path(app_handle: &AppHandle) -> std::io::Result<PathBuf> {
+    let config_dir = app_handle.path().app_config_dir()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, format!("App config directory not found: {}", e)))?;
+    // Ensure the config directory exists
+    fs::create_dir_all(&config_dir)?;
+    Ok(config_dir.join(CONFIG_FILE_NAME))
+}
+
+fn load_config(app_handle: &AppHandle) -> AppConfig {
+    match get_config_path(app_handle) {
+        Ok(path) => {
+            if path.exists() {
+                match File::open(&path) {
+                    Ok(mut file) => {
+                        let mut contents = String::new();
+                        if file.read_to_string(&mut contents).is_ok() {
+                            match serde_json::from_str(&contents) {
+                                Ok(config) => {
+                                    println!("Loaded config from {:?}: {:?}", path, config);
+                                    config
+                                },
+                                Err(e) => {
+                                    eprintln!("Failed to parse config file {:?}: {}. Using default.", path, e);
+                                    AppConfig::default()
+                                }
+                            }
+                        } else {
+                            eprintln!("Failed to read config file {:?}. Using default.", path);
+                            AppConfig::default()
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to open config file {:?}: {}. Using default.", path, e);
+                        AppConfig::default()
+                    }
+                }
+            } else {
+                println!("Config file {:?} not found. Using default.", path);
+                AppConfig::default()
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to determine config path: {}. Using default.", e);
+            AppConfig::default()
+        }
+    }
+}
+
+fn save_config(app_handle: &AppHandle, config: &AppConfig) -> std::io::Result<()> {
+    let path = get_config_path(app_handle)?;
+    let contents = serde_json::to_string_pretty(config)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let mut file = File::create(&path)?;
+    file.write_all(contents.as_bytes())?;
+    println!("Saved config to {:?}: {:?}", path, config);
+    Ok(())
+}
+// --- End Configuration Handling ---
 
 struct AppState {
     player: Arc<MpvPlayer>,
     port: u16,
     last_seek: Arc<AtomicU64>, // Track last seek time
+    config: Arc<tokio::sync::Mutex<AppConfig>>, // Add config to AppState
 }
 
 #[tauri::command]
@@ -37,15 +118,85 @@ async fn sync_room(room_id: String) -> Result<String, String> {
 #[tauri::command]
 async fn exit_app(
     app_handle: tauri::AppHandle,
-    player: tauri::State<'_, Arc<AppState>>,
+    state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
-    // Tell MPV to exit
-    player.player.exit();
-    // Schedule the application to exit shortly
+    println!("Exit requested.");
+    state.player.exit();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(500)).await;
         app_handle.exit(0);
     });
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_port_and_restart(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    new_port: u16,
+) -> Result<(), String> {
+    println!("Set port and restart requested: New port = {}", new_port);
+    if !(1025..=65535).contains(&new_port) {
+        return Err("Invalid port number. Must be between 1025 and 65535.".to_string());
+    }
+    let mut config_guard = state.config.lock().await;
+    config_guard.port = Some(new_port);
+    if let Err(e) = save_config(&app_handle, &config_guard) {
+        eprintln!("Failed to save config: {}", e);
+        return Err(format!("Failed to save configuration: {}", e));
+    }
+    drop(config_guard);
+    println!("Configuration saved. Attempting to restart application...");
+    state.player.exit();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Call restart. This terminates the process if successful.
+    app_handle.restart();
+    // No code needed here. If restart() succeeds, process terminates.
+    // If it somehow failed and returned, the function would implicitly complete,
+    // satisfying the Result<(), String> signature, but this path isn't expected.
+}
+
+#[tauri::command]
+async fn reset_port_and_restart(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    println!("Reset port to auto-detect and restart requested.");
+    let mut config_guard = state.config.lock().await;
+    config_guard.port = None;
+    if let Err(e) = save_config(&app_handle, &config_guard) {
+        eprintln!("Failed to save config for reset: {}", e);
+        return Err(format!("Failed to save configuration for reset: {}", e));
+    }
+    drop(config_guard);
+    println!("Configuration saved for reset. Attempting to restart application...");
+    state.player.exit();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Call restart. This terminates the process if successful.
+    app_handle.restart();
+    // No code needed here.
+}
+
+// --- New Command: Clear Saved Port (No Restart) --- 
+#[tauri::command]
+async fn clear_saved_port(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    println!("Clear saved port requested.");
+    let mut config_guard = state.config.lock().await;
+    if config_guard.port.is_none() {
+        println!("No specific port was saved. Nothing to clear.");
+        return Ok(()); // Nothing to do
+    }
+    config_guard.port = None; // Set to None for auto-detect on next launch
+    if let Err(e) = save_config(&app_handle, &config_guard) {
+        eprintln!("Failed to save config for port clear: {}", e);
+        return Err(format!("Failed to save configuration for port clear: {}", e));
+    }
+    println!("Saved port configuration cleared. Will use auto-detect on next launch.");
     Ok(())
 }
 
@@ -106,13 +257,38 @@ async fn ws_handler(
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 
+// Helper to send JSON error messages over WebSocket
+async fn send_ws_error(socket: &mut axum::extract::ws::WebSocket, command: &str, error_message: &str) {
+    use axum::extract::ws::Message;
+    let error_json = json!({
+        "status": "error",
+        "command": command,
+        "error": error_message
+    });
+    if let Ok(error_str) = serde_json::to_string(&error_json) {
+        if socket.send(Message::Text(error_str)).await.is_err() {
+            eprintln!("Failed to send WebSocket error message");
+        }
+    } else {
+         eprintln!("Failed to serialize error message");
+    }
+}
+
 async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<AppState>) {
     use axum::extract::ws::Message;
-    use tokio::time::{interval, sleep, Instant};
+    use tokio::time::{sleep, Instant};
     use std::sync::atomic::Ordering;
 
+    // --- Dynamic Interval Logic ---
+    const PLAYING_STATUS_INTERVAL: Duration = Duration::from_millis(100); // Faster when playing
+    const PAUSED_STATUS_INTERVAL: Duration = Duration::from_millis(300); // Slower when paused
+    let mut current_interval_duration = PLAYING_STATUS_INTERVAL; // Start with playing interval
+    let mut status_interval = interval(current_interval_duration);
+    status_interval.set_missed_tick_behavior(MissedTickBehavior::Delay); // Prevent burst ticks after delay
+    let mut last_known_pause_state = false; // Track pause state to adjust interval
+    // --- End Dynamic Interval Logic ---
+
     // Constants for connection management
-    const STATUS_INTERVAL: Duration = Duration::from_millis(100);
     const PING_INTERVAL: Duration = Duration::from_secs(15);
     const PING_TIMEOUT: Duration = Duration::from_secs(60);
     const MAX_CONSECUTIVE_ERRORS: u32 = 20;
@@ -120,64 +296,34 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<AppS
     const ERROR_BACKOFF: Duration = Duration::from_millis(100);
 
     // Connection state
-    let mut status_interval = interval(STATUS_INTERVAL);
     let mut ping_interval = interval(PING_INTERVAL);
+    ping_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut last_pong = Instant::now();
     let mut consecutive_errors = 0;
     let last_status_update = Arc::new(AtomicU64::new(0));
 
-    // Pre-allocate buffers for status updates
+    // --- State for Conditional Updates --- 
+    let mut last_sent_status: Option<JsonValue> = None; // Store the last sent status object
+    // Define keys whose changes trigger an update
+    let relevant_keys: HashSet<String> = [
+        "Status", "Position", "Duration", "Path", "Title", "Loop", "Offset", "EndOfFile", "Idle"
+    ].iter().map(|s| s.to_string()).collect();
+
+    // --- Buffers --- 
     let mut status_buffer = String::with_capacity(1024);
 
     'connection: loop {
-        tokio::select! {
-            _ = status_interval.tick() => {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64;
-
-                // Rate limit status updates
-                if now - last_status_update.load(Ordering::Relaxed) < MIN_STATUS_INTERVAL {
-                    continue;
-                }
-
-                match state.player.get_status() {
-                    Ok(status) => {
-                        // Reuse buffer for status string
-                        status_buffer.clear();
-                        if let Ok(status_str) = serde_json::to_string(&status) {
-                            status_buffer.push_str(&status_str);
-                            if socket.send(Message::Text(status_buffer.clone())).await.is_ok() {
-                                last_status_update.store(now, Ordering::Relaxed);
-                                consecutive_errors = 0;
-                            } else {
-                                eprintln!("Non-fatal send error, will retry");
-                                sleep(ERROR_BACKOFF).await;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Error getting player status: {}", e);
-                        sleep(ERROR_BACKOFF).await;
-                    }
-                }
-            }
-            _ = ping_interval.tick() => {
-                if last_pong.elapsed() > PING_TIMEOUT {
-                    eprintln!("WebSocket ping timeout, client will reconnect");
+        // --- Check for MPV Shutdown --- 
+        if state.player.is_shutdown() {
+            eprintln!("MPV shutdown detected by handle_socket, closing WebSocket.");
+            let _ = socket.close().await; // Attempt graceful close
                     break 'connection;
                 }
+        // --- End Check for MPV Shutdown ---
 
-                if socket.send(Message::Ping(vec![])).await.is_err() {
-                    eprintln!("Non-fatal ping error, will retry");
-                    consecutive_errors += 1;
-                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                        eprintln!("Too many errors, allowing client to reconnect");
-                        break 'connection;
-                    }
-                }
-            }
+        tokio::select! {
+            biased; // Prioritize receiving messages over sending status/pings
+
             result = socket.recv() => {
                 match result {
                     Some(Ok(Message::Pong(_))) => {
@@ -185,233 +331,176 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<AppS
                         consecutive_errors = 0;
                     }
                     Some(Ok(Message::Text(text))) => {
+                        last_pong = Instant::now(); // Treat text message as activity
+                        consecutive_errors = 0;
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                            if let Some(command) = json.get("command").and_then(|v| v.as_str()) {
-                                match command {
+                            if let Some(command_str) = json.get("command").and_then(|v| v.as_str()) {
+                                // --- WebSocket Command Handling with Error Reporting ---
+                                match command_str {
                                     "loadURL" => {
                                         if let Some(url) = json.get("url").and_then(|v| v.as_str()) {
                                             println!("Loading URL: {}", url);
                                             if let Err(e) = state.player.load_file(url) {
                                                 eprintln!("Error loading URL: {}", e);
+                                                send_ws_error(&mut socket, "loadURL", &e.to_string()).await;
                                             }
+                                        } else {
+                                             send_ws_error(&mut socket, "loadURL", "Missing or invalid 'url' field").await;
                                         }
                                     },
                                     "play" => {
-                                        // Don't hold the mutex guard across an await boundary
-                                        let _is_paused = match state.player.get_handle() {
-                                            Ok(handle) => {
-                                                let paused = handle.get_property::<bool>("pause").unwrap_or(false);
-                                                if paused {
-                                                    if let Err(e) = handle.set_property("pause", false) {
-                                                        eprintln!("Error playing: {}", e);
-                                                    } else {
-                                                        println!("Play command executed successfully");
-                                                    }
-                                                }
-                                                paused
-                                            },
+                                        match state.player.set_property("pause", "false") { // Use set_property directly
+                                            Ok(_) => println!("Play command executed successfully via WebSocket"),
                                             Err(e) => {
-                                                eprintln!("Failed to get MPV handle: {}", e);
-                                                false
+                                                eprintln!("Error setting pause=false: {}", e);
+                                                send_ws_error(&mut socket, "play", &e.to_string()).await;
                                             }
-                                        };
+                                        }
                                     },
                                     "pause" => {
-                                        // Don't hold the mutex guard across an await boundary
-                                        let _is_paused = match state.player.get_handle() {
-                                            Ok(handle) => {
-                                                let paused = handle.get_property::<bool>("pause").unwrap_or(false);
-                                                if !paused {
-                                                    if let Err(e) = handle.set_property("pause", true) {
-                                                        eprintln!("Error pausing: {}", e);
-                                                    } else {
-                                                        println!("Pause command executed successfully");
-                                                    }
-                                                }
-                                                paused
-                                            },
+                                         match state.player.set_property("pause", "true") { // Use set_property directly
+                                            Ok(_) => println!("Pause command executed successfully via WebSocket"),
                                             Err(e) => {
-                                                eprintln!("Failed to get MPV handle: {}", e);
-                                                true
+                                                eprintln!("Error setting pause=true: {}", e);
+                                                send_ws_error(&mut socket, "pause", &e.to_string()).await;
                                             }
-                                        };
+                                        }
                                     },
                                     "seek" => {
                                         if let Some(position) = json.get("position").and_then(|v| v.as_f64()) {
                                             println!("Seeking to: {}", position);
-                                            if let Err(e) = state.player.command("seek", &[&position.to_string(), "absolute"]) {
+                                            let offset = state.player.get_offset_seconds();
+                                            let adjusted_time = position + offset;
+                                            println!("WebSocket seek: adjusted to {} from {} (offset {})", adjusted_time, position, offset);
+                                            if let Err(e) = state.player.command("seek", &[&adjusted_time.to_string(), "absolute"]) {
                                                 eprintln!("Error seeking: {}", e);
+                                                send_ws_error(&mut socket, "seek", &e.to_string()).await;
                                             }
+                                        } else {
+                                            send_ws_error(&mut socket, "seek", "Missing or invalid 'position' field").await;
                                         }
                                     },
                                     "setOffset" => {
-                                        // Get current playback info without holding the lock across await
-                                        let current_position;
-                                        let current_path;
-                                        let is_playing;
-                                        
-                                        // This block ensures the handle is dropped before any await
-                                        {
-                                            let handle_result = state.player.get_handle();
-                                            if let Err(e) = handle_result {
-                                                eprintln!("Failed to get MPV handle: {}", e);
-                                                continue;
-                                            }
-                                            
-                                            let handle = handle_result.unwrap();
-                                            current_position = handle.get_property::<f64>("time-pos").unwrap_or(0.0);
-                                            current_path = handle.get_property::<String>("path").ok();
-                                            is_playing = !handle.get_property::<bool>("pause").unwrap_or(true);
-                                        } // handle is dropped here
-                                        
-                                        // Handle offset set in seconds
+                                        let mut offset_result: Result<f64, mpv::Error> = Err(mpv::Error::CommandError("Invalid offset parameters".to_string(), -1));
+                                        let mut update_type = "seconds"; // For response message
+                                        let mut original_value: f64 = 0.0;
+                                        let mut fps_value: f64 = 30.0;
+
                                         if let Some(seconds) = json.get("seconds").and_then(|v| v.as_f64()) {
-                                            println!("Setting offset to {} seconds", seconds);
-                                            if let Err(e) = state.player.set_offset_seconds(seconds) {
+                                            println!("Setting offset to {} seconds via WebSocket", seconds);
+                                            offset_result = state.player.set_offset_seconds(seconds).map(|_| seconds);
+                                            original_value = seconds;
+                                        } else if let Some(frames) = json.get("frames").and_then(|v| v.as_i64()) {
+                                            fps_value = json.get("fps").and_then(|v| v.as_f64()).unwrap_or(30.0);
+                                            println!("Setting offset to {} frames at {} fps via WebSocket", frames, fps_value);
+                                            let seconds = frames as f64 / fps_value;
+                                            offset_result = state.player.set_offset_frames(frames as i32, fps_value).map(|_| seconds);
+                                            update_type = "frames";
+                                            original_value = frames as f64;
+                                        }
+
+                                        match offset_result {
+                                            Ok(calculated_seconds) => {
+                                                let response_json = if update_type == "seconds" {
+                                                    json!({
+                                                        "status": "success",
+                                                        "command": "offsetUpdated",
+                                                        "seconds": calculated_seconds
+                                                    })
+                                                    } else {
+                                                     json!({
+                                                        "status": "success",
+                                                        "command": "offsetUpdated",
+                                                        "frames": original_value as i64,
+                                                        "seconds": calculated_seconds,
+                                                        "fps": fps_value
+                                                    })
+                                                };
+                                                if let Ok(response_str) = serde_json::to_string(&response_json) {
+                                                    if socket.send(Message::Text(response_str)).await.is_err() {
+                                                        eprintln!("Error sending offset confirmation");
+                                                    }
+                                                    } else {
+                                                     eprintln!("Error serializing offset confirmation");
+                                                }
+                                            },
+                                            Err(e) => {
                                                 eprintln!("Error setting offset: {}", e);
-                                                continue;
-                                            }
-                                            
-                                            // Process path and seek/unpause commands (no MutexGuard involved)
-                                            if let Some(path) = &current_path {
-                                                if !path.is_empty() {
-                                                    let path_str = path.clone();
-                                                    if let Err(e) = state.player.load_file(&path_str) {
-                                                        eprintln!("Error reloading file: {}", e);
-                                                    } else {
-                                                        // Schedule delayed commands
-                                                        if current_position > 0.0 {
-                                                            state.player.apply_delayed_command(
-                                                                700,
-                                                                "seek".to_string(),
-                                                                vec![current_position.to_string(), "absolute".to_string()],
-                                                            );
-                                                            
-                                                            if is_playing {
-                                                                state.player.apply_delayed_command(
-                                                                    800,
-                                                                    "set".to_string(),
-                                                                    vec!["pause".to_string(), "no".to_string()],
-                                                                );
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            
-                                            // Prepare response
-                                            let response = format!(
-                                                "{{\"status\":\"success\",\"command\":\"offsetUpdated\",\"seconds\":{}}}",
-                                                seconds
-                                            );
-                                            
-                                            // Send confirmation to client
-                                            if let Err(e) = socket.send(Message::Text(response)).await {
-                                                eprintln!("Error sending websocket response: {}", e);
-                                            }
-                                        } 
-                                        // Handle offset set in frames
-                                        else if let Some(frames) = json.get("frames").and_then(|v| v.as_i64()) {
-                                            let fps = json.get("fps").and_then(|v| v.as_f64()).unwrap_or(30.0);
-                                            println!("Setting offset to {} frames at {} fps", frames, fps);
-                                            if let Err(e) = state.player.set_offset_frames(frames as i32, fps) {
-                                                eprintln!("Error setting frame offset: {}", e);
-                                                continue;
-                                            }
-                                            
-                                            // Process path and seek/unpause commands (no MutexGuard involved)
-                                            if let Some(path) = &current_path {
-                                                if !path.is_empty() {
-                                                    let path_str = path.clone();
-                                                    if let Err(e) = state.player.load_file(&path_str) {
-                                                        eprintln!("Error reloading file: {}", e);
-                                                    } else {
-                                                        // Schedule delayed commands
-                                                        if current_position > 0.0 {
-                                                            state.player.apply_delayed_command(
-                                                                700,
-                                                                "seek".to_string(),
-                                                                vec![current_position.to_string(), "absolute".to_string()],
-                                                            );
-                                                            
-                                                            if is_playing {
-                                                                state.player.apply_delayed_command(
-                                                                    800,
-                                                                    "set".to_string(),
-                                                                    vec!["pause".to_string(), "no".to_string()],
-                                                                );
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            
-                                            // Calculate seconds for response
-                                            let seconds = (frames as f64) / fps;
-                                            
-                                            // Prepare response
-                                            let response = format!(
-                                                "{{\"status\":\"success\",\"command\":\"offsetUpdated\",\"frames\":{},\"seconds\":{},\"fps\":{}}}",
-                                                frames, seconds, fps
-                                            );
-                                            
-                                            // Send confirmation to client
-                                            if let Err(e) = socket.send(Message::Text(response)).await {
-                                                eprintln!("Error sending websocket response: {}", e);
+                                                send_ws_error(&mut socket, "setOffset", &e.to_string()).await;
                                             }
                                         }
                                     },
                                     "getOffset" => {
                                         let offset = state.player.get_offset_seconds();
-                                        let response = format!(
-                                            "{{\"status\":\"success\",\"command\":\"offsetStatus\",\"seconds\":{}}}",
-                                            offset
-                                        );
-                                        
-                                        if let Err(e) = socket.send(Message::Text(response)).await {
-                                            eprintln!("Error sending offset status: {}", e);
+                                        let response = json!({
+                                            "status": "success",
+                                            "command": "offsetStatus",
+                                            "seconds": offset
+                                        });
+                                        if let Ok(response_str) = serde_json::to_string(&response) {
+                                            if socket.send(Message::Text(response_str)).await.is_err() {
+                                                eprintln!("Error sending offset status");
+                                            }
+                                        } else {
+                                             eprintln!("Error serializing offset status");
                                         }
                                     },
                                     "setLoop" => {
                                         if let Some(enabled) = json.get("enabled").and_then(|v| v.as_bool()) {
                                             println!("Setting loop to: {}", enabled);
-                                            
-                                            if let Err(e) = state.player.set_loop(enabled) {
+                                            match state.player.set_loop(enabled) {
+                                                Ok(_) => {
+                                                    let response = json!({
+                                                        "status": "success",
+                                                        "command": "loopUpdated",
+                                                        "enabled": enabled
+                                                    });
+                                                     if let Ok(response_str) = serde_json::to_string(&response) {
+                                                        if socket.send(Message::Text(response_str)).await.is_err() {
+                                                            eprintln!("Error sending loop confirmation");
+                                                        }
+                                                    } else {
+                                                        eprintln!("Error serializing loop confirmation");
+                                                    }
+                                                },
+                                                Err(e) => {
                                                 eprintln!("Error setting loop: {}", e);
-                                                continue;
+                                                    send_ws_error(&mut socket, "setLoop", &e.to_string()).await;
+                                                }
                                             }
-                                            
-                                            // Send confirmation to client
-                                            let response = format!(
-                                                "{{\"status\":\"success\",\"command\":\"loopUpdated\",\"enabled\":{}}}",
-                                                if enabled { "true" } else { "false" }
-                                            );
-                                            
-                                            if let Err(e) = socket.send(Message::Text(response)).await {
-                                                eprintln!("Error sending WebSocket response: {}", e);
-                                            }
+                                        } else {
+                                            send_ws_error(&mut socket, "setLoop", "Missing or invalid 'enabled' field").await;
                                         }
                                     },
                                     "getLoop" => {
                                         match state.player.get_loop() {
                                             Ok(enabled) => {
-                                                // Send loop status to client
-                                                let response = format!(
-                                                    "{{\"status\":\"success\",\"command\":\"loopStatus\",\"enabled\":{}}}",
-                                                    if enabled { "true" } else { "false" }
-                                                );
-                                                
-                                                if let Err(e) = socket.send(Message::Text(response)).await {
-                                                    eprintln!("Error sending WebSocket response: {}", e);
+                                                let response = json!({
+                                                    "status": "success",
+                                                    "command": "loopStatus",
+                                                    "enabled": enabled
+                                                });
+                                                if let Ok(response_str) = serde_json::to_string(&response) {
+                                                     if socket.send(Message::Text(response_str)).await.is_err() {
+                                                        eprintln!("Error sending loop status");
+                                                    }
+                                                } else {
+                                                     eprintln!("Error serializing loop status");
                                                 }
                                             },
                                             Err(e) => {
                                                 eprintln!("Error getting loop status: {}", e);
+                                                // Optionally send error back if needed
+                                                // send_ws_error(&mut socket, "getLoop", &e.to_string()).await;
                                             }
                                         }
                                     },
-                                    _ => {}
+                                    _ => {
+                                        eprintln!("Received unknown WebSocket command: {}", command_str);
+                                        send_ws_error(&mut socket, command_str, "Unknown command").await;
                                 }
+                                }
+                                // --- End WebSocket Command Handling ---
                             }
                         }
                     }
@@ -423,35 +512,135 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<AppS
                         eprintln!("WebSocket error: {}", e);
                         consecutive_errors += 1;
                         if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                            eprintln!("Too many errors, allowing client to reconnect");
+                            eprintln!("Too many errors, closing WebSocket");
                             break 'connection;
                         }
+                        sleep(ERROR_BACKOFF).await; // Backoff on error
                     }
                     None => {
-                        eprintln!("WebSocket closed by client, allowing reconnect");
+                        eprintln!("WebSocket closed by client.");
                         break 'connection;
                     }
-                    _ => {}
+                    _ => {} // Ignore other message types like Binary
+                }
+            }
+
+            // --- Status Update Tick --- 
+            _ = status_interval.tick() => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+
+                if now - last_status_update.load(Ordering::Relaxed) < MIN_STATUS_INTERVAL {
+                    continue;
+                }
+
+                match state.player.get_status() {
+                    Ok(current_status) => {
+                        // --- Check if status changed --- 
+                        let mut should_send = true; // Send first time or if comparison fails
+                        if let Some(last_status) = &last_sent_status {
+                            // Compare only relevant keys for changes
+                            should_send = relevant_keys.iter().any(|key| {
+                                current_status.get(key) != last_status.get(key)
+                            });
+                        }
+                        // --- End Check --- 
+
+                        if should_send {
+                            status_buffer.clear();
+                            if let Ok(status_str) = serde_json::to_string(&current_status) {
+                                status_buffer.push_str(&status_str);
+                                if socket.send(Message::Text(status_buffer.clone())).await.is_ok() {
+                                    last_sent_status = Some(current_status.clone()); // Store the sent status
+                                    last_status_update.store(now, Ordering::Relaxed);
+                                    consecutive_errors = 0;
+
+                                    // Adjust Interval Logic (remains the same)
+                                    let is_paused = current_status.get("Status").and_then(|v| v.as_str()) == Some("Paused");
+                                    let desired_interval = if is_paused {
+                                        PAUSED_STATUS_INTERVAL
+                                    } else {
+                                        PLAYING_STATUS_INTERVAL
+                                    };
+                                    if is_paused != last_known_pause_state || current_interval_duration != desired_interval {
+                                        println!("Adjusting status interval. Paused: {}, New Interval: {:?}", is_paused, desired_interval);
+                                        status_interval = interval(desired_interval);
+                                        status_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+                                        current_interval_duration = desired_interval;
+                                        last_known_pause_state = is_paused;
+                                    }
+                                } else {
+                                    eprintln!("Non-fatal status send error, will retry");
+                                    consecutive_errors += 1;
+                                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                                        eprintln!("Too many status send errors, closing WebSocket");
+                                        break 'connection;
+                                    }
+                                    sleep(ERROR_BACKOFF).await;
+                                }
+                            }
+                        } else {
+                            // Status hasn't changed significantly, skip sending
+                            // println!("Status unchanged, skipping send."); // Optional debug log
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error getting player status: {}", e);
+                        consecutive_errors += 1;
+                         if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            eprintln!("Too many status get errors, closing WebSocket");
+                            break 'connection;
+                        }
+                        sleep(ERROR_BACKOFF).await; // Backoff on error
+                    }
+                }
+            }
+
+            // --- Ping Tick --- 
+            _ = ping_interval.tick() => {
+                if last_pong.elapsed() > PING_TIMEOUT {
+                    eprintln!("WebSocket ping timeout, closing connection.");
+                    break 'connection;
+                }
+
+                if socket.send(Message::Ping(vec![])).await.is_err() {
+                    eprintln!("Non-fatal ping error, will retry");
+                    consecutive_errors += 1;
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        eprintln!("Too many ping errors, closing WebSocket");
+                        break 'connection;
+                    }
+                     sleep(ERROR_BACKOFF).await; // Backoff on error
                 }
             }
         }
     }
-    eprintln!("WebSocket connection ended, ready for client reconnect");
+    eprintln!("WebSocket connection ended.");
 }
 
 async fn status_page(
     AxumState(state): AxumState<Arc<AppState>>,
 ) -> Result<Html<String>, (StatusCode, String)> {
-    // Cache the HTML template with the port number
+    // Cache the HTML template
     static HTML_TEMPLATE: Lazy<String> = Lazy::new(|| {
         include_str!("../templates/status.html").to_string()
     });
 
+    // Get the current port from the state
+    let current_port = state.port;
+    // Get the configured port (if any) for display
+    let config = state.config.lock().await;
+    let configured_port_str = config.port.map_or("Auto (Default: 3000)".to_string(), |p| p.to_string());
+    drop(config);
+
     // Replace placeholders with actual values
     let html = HTML_TEMPLATE
-        .replace("{port}", &state.port.to_string())
-        .replace("{port}", &state.port.to_string())
-        .replace("{port}", &state.port.to_string());
+        .replace("{current_port}", &current_port.to_string())
+        .replace("{configured_port}", &configured_port_str)
+        // Keep replacing {port} for backward compatibility - remove semicolon
+        .replace("{port}", &current_port.to_string());
 
     Ok(Html(html))
 }
@@ -494,19 +683,39 @@ async fn set_playback_time(
     AxumState(state): AxumState<Arc<AppState>>,
     Json(payload): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    const MIN_SEEK_INTERVAL: u64 = 50; // Minimum 50ms between seeks
-
+    const MIN_SEEK_INTERVAL: u64 = 50; 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
 
-    // Check for rate limiting
-    if now - state.last_seek.load(Ordering::Relaxed) < MIN_SEEK_INTERVAL {
+    // --- Explicit Idle Check First ---
+    match state.player.get_handle() {
+        Ok(handle) => {
+            // Check if a path is loaded. If get_property fails, assume idle.
+            if handle.get_property::<String>("path").is_err() {
+                let time = payload["time"].as_f64().unwrap_or(-1.0); // Get time for logging if possible
+                println!("HTTP seek: Player is idle (no path property), ignoring seek request to {}.", time);
         return Ok(Json(json!({
-            "status": "rate_limited",
-            "message": "Too many seek requests"
+                    "status": "success",
+                    "ignored": true, 
+                    "reason": "Player is idle (no media loaded)",
+                    "time": time, // Include requested time in response
+                    "timestamp": now
         })));
+            }
+            // If path exists, proceed with the seek logic
+        }
+        Err(e) => {
+            // Failed to get handle, this is a more significant error
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get MPV handle: {}", e)));
+        }
+    }
+    // --- End Idle Check ---
+
+    // Rate limit check (only apply if not idle)
+    if now - state.last_seek.load(Ordering::Relaxed) < MIN_SEEK_INTERVAL {
+        return Ok(Json(json!({ "status": "rate_limited", "message": "Too many seek requests" })));
     }
 
     // Get time from payload
@@ -515,27 +724,32 @@ async fn set_playback_time(
         "Missing or invalid 'time' field".to_string(),
     ))?;
 
-    // Get the current offset to adjust the seek position
+    // Get offset
     let offset = state.player.get_offset_seconds();
-    let adjusted_time = time + offset; // Add offset to the requested time
+    let adjusted_time = time + offset;
 
-    // Send seek command with adjusted time
-    println!("Seeking to {} (adjusted from {} with offset {})", adjusted_time, time, offset);
-    state
-        .player
-        .command("seek", &[&adjusted_time.to_string(), "absolute"])
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    // Update last seek time
+    // Attempt seek command (should succeed if we passed the idle check)
+    println!("HTTP seek: Attempting seek to {} (adjusted from {} with offset {})", adjusted_time, time, offset);
+    match state.player.command("seek", &[&adjusted_time.to_string(), "absolute"]) {
+        Ok(_) => {
+            // Seek succeeded
     state.last_seek.store(now, Ordering::Relaxed);
-
     Ok(Json(json!({
         "status": "success",
+                "ignored": false, 
         "time": time,
         "adjusted_time": adjusted_time,
         "offset": offset,
         "timestamp": now
     })))
+        }
+        Err(e) => {
+            // If seek fails even after the idle check, it's an unexpected error
+            let error_string = e.to_string();
+            eprintln!("Error executing MPV seek command even after idle check: {}", error_string);
+            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Seek command failed unexpectedly: {}", error_string)))
+        }
+    }
 }
 
 async fn get_connection_status(
@@ -553,8 +767,10 @@ async fn get_connection_status(
 
     let eof_reached = get_str("EndOfFile") == "yes";
     let is_idle = get_str("Idle") == "yes";
-    let is_paused = get_str("Paused") == "yes";
+    // Check Status property for play/pause state as reported by get_status
+    let is_paused = get_str("Status") == "Paused"; 
     let duration = get_f64("Duration");
+    // Use the adjusted position reported by get_status
     let position = get_f64("Position");
 
     // Player is playing if not paused, not at EOF, and not idle
@@ -568,7 +784,9 @@ async fn get_connection_status(
         "eof": eof_reached,
         "idle": is_idle,
         "duration": duration,
-        "position": position
+        "position": position,
+        "paused": is_paused, // Add explicit paused state
+        "offset": state.player.get_offset_seconds() // Add current offset
     })))
 }
 
@@ -577,18 +795,7 @@ async fn set_offset(
     AxumState(state): AxumState<Arc<AppState>>,
     Json(payload): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    // Get current playback position and state
-    let current_position;
-    let current_path;
-    let is_playing;
-    
-    {
-        let handle = state.player.get_handle()
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        current_position = handle.get_property::<f64>("time-pos").unwrap_or(0.0);
-        current_path = handle.get_property::<String>("path").ok();
-        is_playing = !handle.get_property::<bool>("pause").unwrap_or(true);
-    } // handle is automatically dropped here when the scope ends
+    // Removed file reload and delayed commands
     
     // Handle both seconds and frames offsets
     let offset_seconds = if let Some(seconds) = payload.get("seconds").and_then(|v| v.as_f64()) {
@@ -607,35 +814,9 @@ async fn set_offset(
         return Err((StatusCode::BAD_REQUEST, "Missing 'seconds' or 'frames' parameter".to_string()));
     };
 
-    // If currently playing a file, reload it to apply the offset
-    if let Some(path) = current_path {
-        if !path.is_empty() {
-            println!("Reloading file to apply new offset: {}", path);
-            
-            // Reload the file to apply the new offset
-            state.player.load_file(&path)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-                
-            // After a short delay, seek to the previous position if needed
-            if current_position > 0.0 {
-                // Schedule a seek command to return to the previous position
-                state.player.apply_delayed_command(
-                    700, // 700ms delay
-                    "seek".to_string(),
-                    vec![current_position.to_string(), "absolute".to_string()],
-                );
-                
-                // If we were playing, schedule an unpause command
-                if is_playing {
-                    state.player.apply_delayed_command(
-                        800, // 800ms delay (after seek)
-                        "set".to_string(),
-                        vec!["pause".to_string(), "no".to_string()],
-                    );
-                }
-            }
-        }
-    }
+    // Just updating the internal offset is sufficient now.
+    // The change will be reflected in subsequent get_status and seek calls.
+    println!("Updated offset to {} seconds via HTTP", offset_seconds);
 
     Ok(Json(json!({
         "status": "success",
@@ -725,29 +906,73 @@ fn find_templates_dir() -> PathBuf {
 
 #[tokio::main]
 async fn main() {
-    let (player, _exit_receiver) = MpvPlayer::new().expect("Failed to initialize MPV player");
-    let player = Arc::new(player);
+    // Tauri setup needs the AppHandle, so we get it later in the setup closure.
+    // We'll load the config *inside* the setup closure.
 
-    // Determine port
-    let port = match tokio::net::TcpListener::bind(("0.0.0.0", 3000)).await {
-        Ok(listener) => { drop(listener); 3000 }
+    tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_http::init())
+        // Add the new command to the handler
+        .invoke_handler(tauri::generate_handler![
+            sync_room, 
+            exit_app, 
+            set_port_and_restart,
+            reset_port_and_restart,
+            clear_saved_port // Register the new command
+        ])
+        .setup(|app| { // Use the setup closure
+            // --- Load Config --- 
+            let app_handle = app.handle().clone();
+            let config = load_config(&app_handle);
+            let initial_config = Arc::new(tokio::sync::Mutex::new(config.clone()));
+
+            // --- Determine Port --- 
+            let port = match config.port {
+                Some(p) if (1025..=65535).contains(&p) => {
+                    // Try binding to the configured port (SYNC check)
+                    match TcpListener::bind(format!("0.0.0.0:{}", p)) {
+                        Ok(listener) => { 
+                            drop(listener); 
+                            println!("Using configured port: {}", p);
+                            p 
+                        },
+                        Err(e) => {
+                            eprintln!("Configured port {} is unavailable: {}. Falling back.", p, e);
+                            pick_unused_port().expect("No ports available")
+                        }
+                    }
+                },
+                Some(p) => {
+                    eprintln!("Configured port {} is invalid. Falling back.", p);
+                    pick_unused_port().expect("No ports available")
+                }
+                None => { // No port configured, try default 3000 (SYNC check)
+                    match TcpListener::bind(("0.0.0.0", 3000)) { // Use std::net::TcpListener (SYNC)
+                        Ok(listener) => { drop(listener); 3000 },
         Err(_) => pick_unused_port().expect("No ports available"),
+                    }
+                }
     };
     let url = format!("http://localhost:{}", port);
 
+            // --- Initialize MPV Player --- 
+            let (player, _exit_receiver) = MpvPlayer::new().expect("Failed to initialize MPV player");
+            let player = Arc::new(player);
+
+            // --- Create App State --- 
     let app_state = Arc::new(AppState {
         player: Arc::clone(&player),
         port,
         last_seek: Arc::new(AtomicU64::new(0)),
+                config: initial_config, // Pass the config Arc
     });
+            app.manage(app_state.clone()); // Manage the state
 
-    // --- Start: Use find_templates_dir for static path ---
+            // --- Start Axum Server --- 
     let static_path = find_templates_dir();
     println!("Axum will serve static files from: {:?}", static_path);
-    // --- End: Use find_templates_dir for static path ---
 
-    // Set up the Axum server
-    let app = Router::new()
+            let axum_app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/control/:action", post(control_player))
         .route("/room/:id", get(room_status))
@@ -769,51 +994,43 @@ async fn main() {
         )
         .with_state(app_state.clone());
 
-    // Start the server in a separate task
-    let server_handle = tokio::spawn({ 
-        let app = app.clone();
-        let url = url.clone(); // Clone url before the move
+            tokio::spawn({ 
+                let app_clone = axum_app.clone();
+                let url_clone = url.clone();
         async move {
             match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
                 Ok(listener) => {
-                    println!("Server running on {}", url);
-                    if let Err(e) = axum::serve(listener, app).await {
+                            println!("Server running on {}", url_clone);
+                            if let Err(e) = axum::serve(listener, app_clone).await {
                         eprintln!("Server error: {}", e);
                     }
                 }
                 Err(e) => {
-                    eprintln!("Failed to bind to port {}: {}", port, e);
+                            eprintln!("Failed to bind Axum server to port {}: {}", port, e);
                 }
             }
         }
     });
 
-    // Start the Tauri application
-    tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_http::init())
-        .manage(app_state.clone())
-        .invoke_handler(tauri::generate_handler![sync_room, exit_app])
-        .setup(move |app_handle| {
-            // Create the main window that points to our server
+            // --- Create Main Window --- 
             let window = tauri::WebviewWindowBuilder::new(
-                app_handle,
-                "main", // the unique window label
+                app,
+                "main",
                 WebviewUrl::External(url.parse().unwrap())
             )
             .title("Alien")
             .inner_size(800.0, 600.0)
             .build()?;
 
-            // Monitor MPV events
+            // --- Monitor MPV Events --- 
             let window_clone = window.clone();
             let player_clone = Arc::clone(&player);
             std::thread::spawn(move || {
                 loop {
                     player_clone.check_events();
                     if player_clone.is_shutdown() {
-                        println!("MPV player shutdown detected");
-                        window_clone.close().unwrap();
+                        println!("MPV player shutdown detected by monitor thread.");
+                        let _ = window_clone.close(); // Attempt to close window
                         break;
                     }
                     std::thread::sleep(Duration::from_millis(100));
@@ -825,7 +1042,5 @@ async fn main() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 
-    // Cleanup
-    server_handle.abort();
-    println!("Application closing, cleaning up...");
+    println!("Application closing, cleanup likely handled by OS.");
 }

@@ -21,7 +21,7 @@ powershell -ExecutionPolicy Bypass -File "%MPV_SOURCE%\generate-lib.ps1"
 
 :: Run the build
 echo Building application...
-npm run build
+npm run dev
 
 if errorlevel 1 (
     echo Build failed

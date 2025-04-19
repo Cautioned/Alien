@@ -11,6 +11,7 @@ lerna-debug.log*
 node_modules
 /.pnp
 .pnp.js
+*lock.json
 
 # Build outputs
 /dist
@@ -71,3 +72,7 @@ src-tauri/libmpv-2.lib
 # OS files
 Thumbs.db
 Desktop.ini
+
+# roblox
+*.lua
+*.luau

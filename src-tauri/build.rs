@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 // Define copy_dir_all here, used for Windows script copying
 fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<()> {
@@ -137,12 +136,8 @@ fn main() {
     if cfg!(target_os = "windows") {
         let windows_manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
         let windows_manifest_path = PathBuf::from(&windows_manifest_dir);
-
-        // Define paths relative to src-tauri root
-        let dst_dll = windows_manifest_path.join("libmpv-2.dll"); 
-        let lib_path = windows_manifest_path.join("mpv.lib");
         
-        // --- Scripts copy logic (seems independent, leave as is for now) ---
+        // --- Scripts copy logic ---
         let scripts_src = windows_manifest_path.join("scripts");
         let scripts_dst = windows_manifest_path.join("scripts"); 
         if scripts_src.exists() {
@@ -159,46 +154,6 @@ fn main() {
              println!("cargo:warning=Scripts source directory not found at {:?}", scripts_src);
         }
         // --- End Scripts copy logic ---
-
-        // --- Lib generation logic (Modified) ---
-        // Check if mpv.lib needs generating
-        if !lib_path.exists() {
-            println!("cargo:warning=mpv.lib not found, checking for libmpv-2.dll...");
-            // Check if the required DLL exists at the root (where CI downloads it)
-            if dst_dll.exists() {
-                println!("cargo:warning=Found libmpv-2.dll at {:?}, attempting to generate mpv.lib...", dst_dll);
-                
-                // Run generate-lib.ps1 script (expects dll at the root)
-                let script_path = windows_manifest_path.join("generate-lib.ps1");
-                match Command::new("powershell")
-                    .args(["-ExecutionPolicy", "Bypass", "-File", script_path.to_str().unwrap()])
-                    .current_dir(&windows_manifest_path)
-                    .output() 
-                {
-                    Ok(output) => {
-                        if output.status.success() {
-                            println!("cargo:warning=Successfully generated mpv.lib");
-                            if !lib_path.exists() { // Double check if file was actually created
-                                println!("cargo:warning=Powershell script succeeded but mpv.lib still not found at {:?}!", lib_path);
-                            }
-                        } else {
-                            println!("cargo:warning=Failed to generate mpv.lib via powershell: stderr: {}", String::from_utf8_lossy(&output.stderr));
-                        }
-                    }
-                    Err(e) => {
-                        println!("cargo:warning=Failed to run generate-lib.ps1: {}", e);
-                    }
-                }
-            } else {
-                // DLL not found where expected for lib generation
-                println!("cargo:warning=libmpv-2.dll not found at {:?} - Cannot generate mpv.lib.", dst_dll);
-                println!("cargo:warning=Ensure libmpv-2.dll is present in the src-tauri directory.");
-            }
-        } else {
-            // Lib already exists
-            println!("cargo:warning=mpv.lib already exists at {:?}, skipping generation.", lib_path);
-        }
-        // --- End Lib generation logic ---
     }
     // --- End Windows Specific Logic ---
 

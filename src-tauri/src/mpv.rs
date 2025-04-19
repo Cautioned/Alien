@@ -1,10 +1,11 @@
-use libmpv2::{events::Event, Mpv};
-use serde_json::{self, json};
+use libmpv2::{events::Event, Mpv, Error as LibMpvError};
+use serde_json::{self, json, Value as JsonValue};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::PoisonError;
 
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -12,6 +13,7 @@ pub enum Error {
     InitError(String),
     PropertyError(String, i32),
     CommandError(String, i32),
+    MutexError(String),
 }
 
 impl fmt::Display for Error {
@@ -20,7 +22,20 @@ impl fmt::Display for Error {
             Error::InitError(msg) => write!(f, "Initialization error: {}", msg),
             Error::PropertyError(msg, code) => write!(f, "Property error ({}): {}", code, msg),
             Error::CommandError(msg, code) => write!(f, "Command error ({}): {}", code, msg),
+            Error::MutexError(msg) => write!(f, "Mutex lock error: {}", msg),
         }
+    }
+}
+
+impl<T> From<PoisonError<T>> for Error {
+    fn from(err: PoisonError<T>) -> Self {
+        Error::MutexError(format!("Mutex was poisoned: {}", err))
+    }
+}
+
+impl From<LibMpvError> for Error {
+    fn from(err: LibMpvError) -> Self {
+        Error::PropertyError(err.to_string(), -1)
     }
 }
 
@@ -153,7 +168,7 @@ impl MpvPlayer {
     }
 
     pub fn set_property(&self, name: &str, value: &str) -> Result<(), Error> {
-        let handle = self.handle.lock().unwrap();
+        let handle = self.handle.lock()?;
         
         // Special handling for pause property which is critical for syncing
         if name == "pause" {
@@ -179,9 +194,7 @@ impl MpvPlayer {
     }
 
     pub fn command(&self, cmd: &str, args: &[&str]) -> Result<(), Error> {
-        let handle = self.handle.lock().map_err(|_| {
-            Error::CommandError("Failed to lock MPV handle".to_string(), -1)
-        })?;
+        let handle = self.handle.lock()?;
         
         // Special case for play/pause commands that are critical for syncing
         if cmd == "set" && args.len() >= 2 && args[0] == "pause" {
@@ -204,22 +217,22 @@ impl MpvPlayer {
             .map_err(|e| Error::CommandError(format!("Failed to execute command {}: {}", cmd, e), -1))
     }
 
-    // Set offset in seconds
+    // Set offset in seconds - Just stores the value now
     pub fn set_offset_seconds(&self, offset: f64) -> Result<(), Error> {
         // Convert to milliseconds and store as i64
         let millis = (offset * 1000.0) as i64;
         self.offset_seconds.store(millis, Ordering::Relaxed);
-        println!("Set playback offset to {} seconds", offset);
+        println!("Stored playback offset: {} seconds ({} ms)", offset, millis);
         Ok(())
     }
 
-    // Set offset in frames (converts to seconds based on framerate)
+    // Set offset in frames - Just stores the value now
     pub fn set_offset_frames(&self, frames: i32, fps: f64) -> Result<(), Error> {
         let seconds = frames as f64 / fps;
         // Convert to milliseconds and store as i64
         let millis = (seconds * 1000.0) as i64;
         self.offset_seconds.store(millis, Ordering::Relaxed);
-        println!("Set playback offset to {} frames ({} seconds at {} fps)", frames, seconds, fps);
+        println!("Stored playback offset: {} frames ({} seconds at {} fps, {} ms)", frames, seconds, fps, millis);
         Ok(())
     }
 
@@ -229,233 +242,91 @@ impl MpvPlayer {
         self.offset_seconds.load(Ordering::Relaxed) as f64 / 1000.0
     }
 
-    // Modified load_file method to apply offset when loading
+    // Simplified load_file: Applies offset immediately after loading
     pub fn load_file(&self, file_path: &str) -> Result<(), Error> {
         println!("Loading file: {}", file_path);
         self.command("loadfile", &[file_path])?;
-        
-        // Get the offset value (in seconds)
-        let offset = self.get_offset_seconds();
-        
-        // If there's a positive offset, apply it after a short delay to ensure file is loaded
-        if offset > 0.0 {
-            // Schedule a delayed seek command 
-            println!("Scheduling positive offset: seeking {} seconds", offset);
-            self.apply_delayed_command(
-                500, // 500ms delay
-                "seek".to_string(),
-                vec![offset.to_string(), "absolute".to_string()],
-            );
-        } 
-        // If there's a negative offset, we need to pause and wait
-        else if offset < 0.0 {
-            let delay = -offset;
-            
-            // First make sure looping is enabled
-            self.apply_delayed_command(
-                400, // 400ms delay
-                "set".to_string(),
-                vec!["loop-file".to_string(), "inf".to_string()],
-            );
 
-            // Get the video duration after a short delay to check if we're close to the end
-            let handle_clone = Arc::clone(&self.handle);
-            let offset_val = offset;
-            
-            std::thread::spawn(move || {
-                // Wait for the file to be loaded
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                
-                if let Ok(handle) = handle_clone.lock() {
-                    if let Ok(duration) = handle.get_property::<f64>("duration") {
-                        println!("Video duration: {} seconds", duration);
-                        
-                        // If the offset would take us before 0, loop from the end
-                        // Use better threshold detection for EOF comparison
-                        if duration + offset_val < 0.0 {
-                            // Calculate the wrapped position, ensuring we're not too close to EOF
-                            let mut wrapped_pos = duration + (offset_val % duration);
-                            
-                            // Check if we'd end up within 50ms of EOF, which can cause playback issues
-                            if duration - wrapped_pos < 0.05 {
-                                // Move away from EOF by a small amount to avoid timing edge cases
-                                wrapped_pos = duration - 0.1;
-                                println!("Adjusted wrapped position to avoid EOF edge case");
-                            }
-                            
-                            // Seek to the appropriate position from the end
-                            println!("Applying wrapped negative offset: seeking to {} seconds from end", wrapped_pos);
-                            let _ = handle.command("seek", &[&wrapped_pos.to_string(), "absolute"]);
-                            // Pause after seeking
-                            let _ = handle.set_property("pause", true);
-                            
-                            // Wait for the delay and then unpause
-                            drop(handle); // Drop the mutex lock before sleeping
-                            std::thread::sleep(std::time::Duration::from_secs_f64(delay));
-                            if let Ok(handle) = handle_clone.lock() {
-                                println!("Resuming playback after offset delay");
-                                let _ = handle.set_property("pause", false);
-                            }
-                        } else {
-                            // Normal negative offset within duration
-                            println!("Applying negative offset: pausing for {} seconds", delay);
-                            let _ = handle.set_property("pause", true);
-                            
-                            drop(handle); // Drop the mutex lock before sleeping
-                            std::thread::sleep(std::time::Duration::from_secs_f64(delay));
-                            if let Ok(handle) = handle_clone.lock() {
-                                println!("Resuming playback after offset delay");
-                                let _ = handle.set_property("pause", false);
-                            }
-                        }
-                    } else {
-                        // If we can't get the duration, fall back to simple pause-wait-unpause
-                        let _ = handle.set_property("pause", true);
-                        
-                        drop(handle); // Drop the mutex lock before sleeping
-                        std::thread::sleep(std::time::Duration::from_secs_f64(delay));
-                        if let Ok(handle) = handle_clone.lock() {
-                            println!("Resuming playback after offset delay");
-                            let _ = handle.set_property("pause", false);
-                        }
-                    }
-                }
-            });
+        // Get the current offset value (in seconds)
+        let offset = self.get_offset_seconds();
+
+        // Apply offset immediately ONLY if it's significantly non-zero
+        // Use a larger threshold (e.g., 0.05s) to avoid seeking near frame 0
+        if offset.abs() > 0.05 { 
+            // Use a slight delay to ensure file is loaded enough for seek
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            println!("Applying significant offset after load: seeking to {} seconds", offset);
+            self.command("seek", &[&offset.to_string(), "absolute"])?;
+        } else {
+             println!("Offset near zero ({:.3}s), letting MPV start normally.", offset);
         }
-        
+
         Ok(())
     }
 
-    pub fn get_status(&self) -> Result<serde_json::Value, Error> {
-        let handle = self.handle.lock().map_err(|_| {
-            Error::PropertyError("Failed to lock MPV handle".to_string(), -1)
-        })?;
-        
-        let mut status = serde_json::Map::new();
+    pub fn get_status(&self) -> Result<JsonValue, Error> {
+        let handle = self.handle.lock()?;
 
-        // First check if we have a file loaded
-        let path_result = handle.get_property::<String>("path");
-        
-        if path_result.is_err() {
-            status.insert("Status".to_string(), json!(serde_json::Value::String("Idle".to_string())));
-            return Ok(json!(status));
-        }
-        
-        // Get basic playback info
-        let pause = handle.get_property::<bool>("pause").unwrap_or(true);
-        let position = handle.get_property::<f64>("time-pos").unwrap_or(0.0);
-        let duration = handle.get_property::<f64>("duration").unwrap_or(0.0);
-        let volume = handle.get_property::<f64>("volume").unwrap_or(100.0);
-        let speed = handle.get_property::<f64>("speed").unwrap_or(1.0);
-        let path = path_result.unwrap_or_else(|_| "".to_string());
-        
-        // Add loop status
-        let loop_file = handle.get_property::<String>("loop-file").unwrap_or_else(|_| "no".to_string());
-        let loop_enabled = loop_file == "yes" || loop_file == "inf";
-        
-        // Populate the status object
-        status.insert("Status".to_string(), json!(if pause { "Paused" } else { "Playing" }));
-        status.insert("Position".to_string(), json!(position));
-        status.insert("Duration".to_string(), json!(duration));
-        status.insert("Volume".to_string(), json!(volume));
-        status.insert("Speed".to_string(), json!(speed));
-        status.insert("Path".to_string(), json!(path));
-        status.insert("Loop".to_string(), json!(loop_enabled));
-        
-        // Get other boolean properties
-        let bool_properties = [
-            ("eof-reached", "EndOfFile"),
-            ("idle-active", "Idle"),
-        ];
-        
-        for (prop, label) in bool_properties.iter() {
-            if let Ok(value) = handle.get_property::<bool>(prop) {
-                status.insert(label.to_string(), json!(if value { "yes" } else { "no" }));
-            }
-        }
+        // Get essential properties, handling errors gracefully
+        let time_pos_opt = handle.get_property::<f64>("time-pos").ok();
+        let duration_opt = handle.get_property::<f64>("duration").ok();
+        let path_opt = handle.get_property::<String>("path").ok();
+        let volume_opt = handle.get_property::<f64>("volume").ok();
+        let speed_opt = handle.get_property::<f64>("speed").ok();
+        let loop_file_opt = handle.get_property::<String>("loop-file").ok(); // e.g., "no", "inf"
+        let pause_opt = handle.get_property::<bool>("pause").ok();
+        let eof_reached_opt = handle.get_property::<String>("eof-reached").ok();
+        let idle_active_opt = handle.get_property::<bool>("idle-active").ok();
+        let media_title_opt = handle.get_property::<String>("media-title").ok();
 
-        // Get string properties
-        let string_properties = [
-            ("media-title", "Title"),
-        ];
+        // --- Get FPS --- 
+        let fps_opt = handle.get_property::<f64>("container-fps")
+            .or_else(|_| handle.get_property::<f64>("estimated-vf-fps")) // Fallback
+            .ok(); // Store as Option<f64>
+        // --- End Get FPS ---
 
-        for (prop, label) in string_properties.iter() {
-            if let Ok(value) = handle.get_property::<String>(prop) {
-                status.insert(label.to_string(), json!(value));
-            }
-        }
+        // Determine overall status string and handle potential None values
+        let is_idle = idle_active_opt.unwrap_or(path_opt.is_none()); // Idle if explicit or no path
+        let is_paused = pause_opt.unwrap_or(is_idle); // Paused if explicit or idle
 
-        // Get the offset value (in seconds)
-        let offset = self.get_offset_seconds();
+        let status_str = if is_idle {
+            "Idle".to_string()
+        } else if is_paused {
+            "Paused".to_string()
+        } else {
+            "Playing".to_string()
+        };
 
-        // Get numeric properties and adjust with offset for external sync
-        let numeric_properties = [
-            ("time-pos", "Position"),
-            ("percent-pos", "Progress"),
-            ("playback-time", "Elapsed"),
-            ("playtime-remaining", "Remaining"),
-        ];
+        // Get the current playback offset (in seconds)
+        let current_offset = self.get_offset_seconds();
 
-        for (prop, label) in numeric_properties.iter() {
-            if let Ok(value) = handle.get_property::<f64>(prop) {
-                // If this is a time position, we need to account for the offset in the reported time
-                if prop == &"time-pos" || prop == &"playback-time" {
-                    // For time positions, we subtract the offset from the reported time
-                    // This makes external tools think the video is at a different position
-                    let adjusted_value = value - offset;
-                    
-                    // Handle precise zero value for accurate frame detection
-                    if value < 0.001 {
-                        // If raw value is essentially zero, report exactly zero
-                        status.insert(label.to_string(), json!(0.0));
-                    } else if adjusted_value.abs() < 0.001 {
-                        // If adjusted value is very close to zero, report exactly zero
-                        status.insert(label.to_string(), json!(0.0));
-                    } else {
-                        status.insert(label.to_string(), json!(adjusted_value));
-                    }
-                } else if prop == &"playtime-remaining" && offset != 0.0 {
-                    // For remaining time, add the offset
-                    status.insert(label.to_string(), json!(value + offset));
-                } else if prop == &"percent-pos" && offset != 0.0 {
-                    // Try to adjust the percent position if we have duration
-                    if let Ok(duration) = handle.get_property::<f64>("duration") {
-                        if duration > 0.0 {
-                            let adjusted_time = value - offset;
-                            let adjusted_percent = (adjusted_time / duration) * 100.0;
-                            status.insert(label.to_string(), json!(adjusted_percent.max(0.0).min(100.0)));
-                        } else {
-                            status.insert(label.to_string(), json!(value));
-                        }
-                    } else {
-                        status.insert(label.to_string(), json!(value));
-                    }
-                } else {
-                    status.insert(label.to_string(), json!(value));
-                }
-            }
-        }
+        // Adjust the reported time position by subtracting the offset
+        let adjusted_time_pos = time_pos_opt.map(|t| t - current_offset);
 
-        // Add connection health indicators
-        status.insert("healthy".to_string(), json!(true));
-        status.insert(
-            "timestamp".to_string(),
-            json!(std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()),
-        );
-
-        // Add the offset value to the status
-        status.insert("Offset".to_string(), json!(offset));
-
-        Ok(json!(status))
+        // Build the JSON, handling Option types with json! macro support
+        Ok(json!({
+            "Status": status_str,
+            "Position": adjusted_time_pos, 
+            "Elapsed": adjusted_time_pos, // Legacy field 
+            "Duration": duration_opt,
+            "Path": path_opt,
+            "Title": media_title_opt.or(path_opt), // Use path as fallback title
+            "Volume": volume_opt.map(|v| v.round()), 
+            "Speed": speed_opt,
+            "Loop": loop_file_opt.map_or(false, |l| l == "inf" || l == "yes"), 
+            "Offset": current_offset,
+            "EndOfFile": eof_reached_opt, // Send Option<String> directly
+            "Idle": is_idle, // Send bool directly
+            "fps": fps_opt, // Add Option<f64> directly
+        }))
     }
 
     pub fn check_events(&self) {
+        // Revert to blocking lock() to ensure events are checked
         if let Ok(mut handle) = self.handle.lock() {
             let event_context = handle.event_context_mut();
-            while let Some(Ok(event)) = event_context.wait_event(0.0) {
+            // Use a short timeout for wait_event to avoid blocking indefinitely if no events
+            while let Some(Ok(event)) = event_context.wait_event(0.01) { // Use 10ms timeout
                 match event {
                     Event::Shutdown => {
                         println!("MPV_EVENT_SHUTDOWN received");
@@ -467,6 +338,11 @@ impl MpvPlayer {
                     _ => {}
                 }
             }
+        } else {
+            // This path should ideally not be hit often with a blocking lock, 
+            // but indicates a potential deadlock or poisoned mutex if it is.
+            eprintln!("check_events: Failed to acquire MPV lock (potential poison/deadlock?)");
+            self.quit_flag.store(true, Ordering::Relaxed); // Assume critical error if lock fails
         }
     }
 
@@ -475,93 +351,55 @@ impl MpvPlayer {
             return true;
         }
 
-        // Try to get a property to see if MPV is still responsive
-        if let Ok(handle) = self.handle.lock() {
-            handle.get_property::<bool>("idle-active").is_err()
-        } else {
-            // If we can't lock the mutex, assume MPV is no longer responsive
-            true
+        // Revert to blocking lock() and check property *after* acquiring lock
+        match self.handle.lock() {
+            Ok(handle) => {
+                // Getting a property is a good health check.
+                // If this fails, MPV is likely closed or unresponsive.
+                let is_unresponsive = handle.get_property::<bool>("idle-active").is_err();
+                if is_unresponsive {
+                    println!("is_shutdown: Failed to get property after lock, assuming shutdown.");
+                }
+                is_unresponsive
+            },
+            Err(_) => {
+                // If we fail to acquire the blocking lock, the mutex is poisoned.
+                eprintln!("is_shutdown: Failed to acquire MPV lock (mutex poisoned?), assuming shutdown");
+                true 
+            }
         }
     }
 
     pub fn exit(&self) {
         self.quit_flag.store(true, Ordering::Relaxed);
-        if let Ok(handle) = self.handle.lock() {
+        // Use try_lock here is okay, as sending quit is best-effort during shutdown
+        if let Ok(handle) = self.handle.try_lock() {
             let _ = handle.command("quit", &[]);
+        } else {
+            eprintln!("exit: Could not acquire MPV lock to send quit command (lock held elsewhere?)");
         }
     }
 
     pub fn get_handle(&self) -> Result<std::sync::MutexGuard<'_, Mpv>, Error> {
-        self.handle.lock().map_err(|_| {
-            Error::PropertyError("Failed to lock MPV handle".to_string(), -1)
-        })
+        self.handle.lock().map_err(Error::from)
     }
 
-    // Add a method to get the MPV handle for internal use
     pub(crate) fn get_handle_internal(&self) -> std::sync::MutexGuard<'_, Mpv> {
-        self.handle.lock().unwrap()
+        self.handle.lock().expect("Internal MPV handle lock failed")
     }
 
-    // Add a command to be executed after a delay
-    pub fn apply_delayed_command(&self, delay_ms: u64, command: String, args: Vec<String>) {
-        // Create clones of needed data for the thread
-        let handle_clone = Arc::clone(&self.handle);
-        
-        std::thread::spawn(move || {
-            // Sleep for the specified delay
-            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-            
-            // Now execute the command on the MPV instance
-            println!("Executing delayed command: {} {:?}", command, args);
-            
-            // Convert string args to &str for the command
-            let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-            
-            // Lock the mutex to access the MPV instance
-            if let Ok(handle) = handle_clone.lock() {
-                // Special handling for pause which needs to be set as a property
-                if command == "set" && args.len() >= 2 && args[0] == "pause" {
-                    let pause_value = match args[1].as_str() {
-                        "yes" | "true" => true,
-                        "no" | "false" => false,
-                        _ => {
-                            eprintln!("Invalid pause value: {}", args[1]);
-                            return;
-                        },
-                    };
-                    
-                    if let Err(e) = handle.set_property("pause", pause_value) {
-                        eprintln!("Error setting property: {}", e);
-                    }
-                } else {
-                    // Regular command
-                    if let Err(e) = handle.command(&command, &arg_refs) {
-                        eprintln!("Error executing delayed command: {}", e);
-                    }
-                }
-            } else {
-                eprintln!("Failed to lock MPV instance for delayed command");
-            }
-        });
-    }
-
-    // Set looping mode
     pub fn set_loop(&self, enabled: bool) -> Result<(), Error> {
         let value = if enabled { "inf" } else { "no" };
         println!("Setting loop to: {}", value);
         
-        // Set both loop-file and loop-playlist for maximum compatibility
-        self.set_property("loop-file", value)?;
-        self.set_property("loop-playlist", value)?;
+        { let handle = self.handle.lock()?; handle.set_property("loop-file", value)?; }
+        { let handle = self.handle.lock()?; handle.set_property("loop-playlist", value)?; }
         
         Ok(())
     }
 
-    // Get current loop state
     pub fn get_loop(&self) -> Result<bool, Error> {
-        let handle = self.handle.lock().map_err(|_| {
-            Error::PropertyError("Failed to lock MPV handle".to_string(), -1)
-        })?;
+        let handle = self.handle.lock()?;
         
         let loop_state = handle.get_property::<String>("loop-file")
             .map_err(|e| Error::PropertyError(format!("Failed to get loop state: {}", e), -1))?;
