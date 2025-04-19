@@ -4,7 +4,7 @@
 
 @layer components {
   .card {
-    @apply bg-gray-900 bg-opacity-75 backdrop-blur-sm p-4 sm:p-6 rounded-lg shadow-lg border border-gray-700/50;
+    @apply bg-gray-950 bg-opacity-25 backdrop-blur-sm p-4 sm:p-6 rounded-lg shadow-lg border border-gray-700/50;
   }
   .card-header {
     @apply text-lg sm:text-xl font-semibold text-gray-200 mb-4;

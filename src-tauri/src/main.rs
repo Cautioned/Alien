@@ -20,14 +20,21 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{interval, MissedTickBehavior};
 use tower_http::cors::{Any, CorsLayer};
-use tauri::{AppHandle, Manager, WebviewUrl};
+use tauri::{
+    AppHandle,
+    Manager,
+    WebviewUrl,
+    WindowEvent,
+    menu::{MenuBuilder, MenuItemBuilder},
+    tray::{TrayIconBuilder, TrayIconEvent, MouseButton},
+};
 use portpicker::pick_unused_port;
 use once_cell::sync::Lazy;
 use tower_http::services::ServeDir;
 use std::path::{PathBuf, Path as StdPath};
-use std::net::TcpListener;
 use serde_json::Value as JsonValue;
 use std::collections::HashSet;
+use std::io::ErrorKind;
 
 // --- Configuration Handling --- 
 const CONFIG_FILE_NAME: &str = "alien_config.json";
@@ -906,36 +913,26 @@ fn find_templates_dir() -> PathBuf {
 
 #[tokio::main]
 async fn main() {
-    // Tauri setup needs the AppHandle, so we get it later in the setup closure.
-    // We'll load the config *inside* the setup closure.
-
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
-        // Add the new command to the handler
         .invoke_handler(tauri::generate_handler![
-            sync_room, 
-            exit_app, 
+            sync_room,
+            exit_app,
             set_port_and_restart,
             reset_port_and_restart,
-            clear_saved_port // Register the new command
+            clear_saved_port
         ])
-        .setup(|app| { // Use the setup closure
-            // --- Load Config --- 
+        .setup(|app| {
             let app_handle = app.handle().clone();
             let config = load_config(&app_handle);
             let initial_config = Arc::new(tokio::sync::Mutex::new(config.clone()));
 
-            // --- Determine Port --- 
+            // --- Determine Port (Sync check) ---
             let port = match config.port {
                 Some(p) if (1025..=65535).contains(&p) => {
-                    // Try binding to the configured port (SYNC check)
-                    match TcpListener::bind(format!("0.0.0.0:{}", p)) {
-                        Ok(listener) => { 
-                            drop(listener); 
-                            println!("Using configured port: {}", p);
-                            p 
-                        },
+                    match std::net::TcpListener::bind(format!("0.0.0.0:{}", p)) {
+                        Ok(listener) => { drop(listener); p },
                         Err(e) => {
                             eprintln!("Configured port {} is unavailable: {}. Falling back.", p, e);
                             pick_unused_port().expect("No ports available")
@@ -946,91 +943,163 @@ async fn main() {
                     eprintln!("Configured port {} is invalid. Falling back.", p);
                     pick_unused_port().expect("No ports available")
                 }
-                None => { // No port configured, try default 3000 (SYNC check)
-                    match TcpListener::bind(("0.0.0.0", 3000)) { // Use std::net::TcpListener (SYNC)
+                None => {
+                    match std::net::TcpListener::bind(("0.0.0.0", 3000)) {
                         Ok(listener) => { drop(listener); 3000 },
-        Err(_) => pick_unused_port().expect("No ports available"),
+                        Err(_) => pick_unused_port().expect("No ports available"),
                     }
                 }
-    };
-    let url = format!("http://localhost:{}", port);
+            };
+            let url = format!("http://localhost:{}", port);
 
-            // --- Initialize MPV Player --- 
+            // --- Initialize MPV Player ---
             let (player, _exit_receiver) = MpvPlayer::new().expect("Failed to initialize MPV player");
             let player = Arc::new(player);
 
-            // --- Create App State --- 
-    let app_state = Arc::new(AppState {
-        player: Arc::clone(&player),
-        port,
-        last_seek: Arc::new(AtomicU64::new(0)),
-                config: initial_config, // Pass the config Arc
-    });
-            app.manage(app_state.clone()); // Manage the state
+            // --- Create App State ---
+            let app_state = Arc::new(AppState {
+                player: Arc::clone(&player),
+                port,
+                last_seek: Arc::new(AtomicU64::new(0)),
+                config: initial_config,
+            });
+            app.manage(app_state.clone());
 
-            // --- Start Axum Server --- 
-    let static_path = find_templates_dir();
-    println!("Axum will serve static files from: {:?}", static_path);
+            // --- Start Axum Server ---
+            let static_path = find_templates_dir();
+            println!("Axum will serve static files from: {:?}", static_path);
 
             let axum_app = Router::new()
-        .route("/ws", get(ws_handler))
-        .route("/control/:action", post(control_player))
-        .route("/room/:id", get(room_status))
-        .route("/sync", post(sync))
-        .route("/playback/time", get(get_playback_time))
-        .route("/playback/time", post(set_playback_time))
-        .route("/playback/offset", get(get_offset))
-        .route("/playback/offset", post(set_offset))
-        .route("/playback/loop", get(get_loop))
-        .route("/playback/loop", post(set_loop))
-        .route("/status", get(get_connection_status))
-        .route("/", get(status_page))
-        .nest_service("/static", ServeDir::new(static_path))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
-        .with_state(app_state.clone());
+                .route("/ws", get(ws_handler))
+                .route("/control/:action", post(control_player))
+                .route("/room/:id", get(room_status))
+                .route("/sync", post(sync))
+                .route("/playback/time", get(get_playback_time).post(set_playback_time))
+                .route("/playback/offset", get(get_offset).post(set_offset))
+                .route("/playback/loop", get(get_loop).post(set_loop))
+                .route("/status", get(get_connection_status))
+                .route("/", get(status_page))
+                .nest_service("/static", ServeDir::new(static_path))
+                .layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any))
+                .with_state(app_state.clone());
 
-            tokio::spawn({ 
-                let app_clone = axum_app.clone();
-                let url_clone = url.clone();
-        async move {
-            match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
-                Ok(listener) => {
-                            println!("Server running on {}", url_clone);
-                            if let Err(e) = axum::serve(listener, app_clone).await {
-                        eprintln!("Server error: {}", e);
+            tokio::spawn(async move {
+                match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await {
+                    Ok(listener) => {
+                        println!("Server running on http://localhost:{}", port);
+                        if let Err(e) = axum::serve(listener, axum_app).await {
+                            eprintln!("Server error: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to bind Axum server to port {}: {}", port, e);
                     }
                 }
-                Err(e) => {
-                            eprintln!("Failed to bind Axum server to port {}: {}", port, e);
-                }
-            }
-        }
-    });
+            });
 
-            // --- Create Main Window --- 
-            let window = tauri::WebviewWindowBuilder::new(
+            // --- Create Tray Menu (Using Builder Pattern) ---
+            let quit_item = MenuItemBuilder::new("Quit Alien")
+                .id("quit")
+                .build(&app_handle)?;
+            let show_item = MenuItemBuilder::new("Show Main Window")
+                .id("show_main")
+                .build(&app_handle)?;
+
+            let tray_menu = MenuBuilder::new(&app_handle)
+                .items(&[&show_item, &quit_item])
+                .build()?;
+
+            // --- Tray Icon Setup (Handling events inline) ---
+            let url_clone_for_menu = url.clone(); // Clone url for menu event closure
+            let url_clone_for_tray = url.clone(); // Clone url for tray event closure (Corrected: Separate clone)
+
+            let _tray_icon = TrayIconBuilder::new()
+                .menu(&tray_menu)
+                .tooltip("Alien Sync Tool")
+                .icon(app_handle.default_window_icon().cloned().ok_or_else(|| tauri::Error::InvalidIcon(std::io::Error::new(ErrorKind::NotFound, "Default icon not found")))?) 
+                .on_menu_event(move |app, event| {
+                    let url_clone = url_clone_for_menu.clone(); // Clone again for move closure
+                    match event.id.as_ref() {
+                        "quit" => {
+                            println!("Quit requested from tray.");
+                            app.exit(0);
+                        }
+                        "show_main" => { // Always create new window
+                            println!("Show main window requested from tray menu. Creating new window...");
+                            if let Err(e) = tauri::WebviewWindowBuilder::new(
+                                app,
+                                "main", 
+                                WebviewUrl::External(url_clone.parse().expect("Invalid external URL in menu handler")),
+                            )
+                            .title("Alien Sync")
+                            .inner_size(800.0, 600.0)
+                            .build()
+                            {
+                                eprintln!("Failed to create main window from tray menu: {}", e);
+                            }
+                        }
+                        _ => {}
+                    }
+                })
+                .on_tray_icon_event(move |tray, event| {
+                    let url_clone = url_clone_for_tray.clone(); // Clone again for move closure
+                    match event {
+                        TrayIconEvent::Click { button: MouseButton::Left, .. } => { // Always create new window
+                             println!("Tray icon clicked. Creating new main window...");
+                             let app = tray.app_handle();
+                             if let Err(e) = tauri::WebviewWindowBuilder::new(
+                                app,
+                                "main",
+                                WebviewUrl::External(url_clone.parse().expect("Invalid external URL in tray handler")),
+                            )
+                            .title("Alien Sync")
+                            .inner_size(800.0, 600.0)
+                            .build()
+                            {
+                                eprintln!("Failed to create main window from tray icon click: {}", e);
+                            }
+                        }
+                        _ => {} // Ignore other tray events
+                    }
+                })
+                .build(&app_handle)?;
+
+             // --- Create Dummy Background Window --- 
+             let _dummy_window = tauri::WebviewWindowBuilder::new(
                 app,
-                "main",
-                WebviewUrl::External(url.parse().unwrap())
-            )
-            .title("Alien")
-            .inner_size(800.0, 600.0)
-            .build()?;
+                "background-runner", // Unique label
+                 WebviewUrl::App("".into()), // Load empty content
+             )
+             .visible(false) // Keep it hidden
+             .skip_taskbar(true) // Don't show in taskbar
+             .title("Alien Background Runner") // Optional title
+             .inner_size(1.0, 1.0) // Minimal size
+             .build()?;
 
-            // --- Monitor MPV Events --- 
-            let window_clone = window.clone();
+            // --- Create Initial Main Window (Using External URL) ---
+            let main_window = match app.get_webview_window("main") {
+                Some(win) => win, // Should ideally not exist yet, but handle defensively
+                None => {
+                    tauri::WebviewWindowBuilder::new(
+                        app,
+                        "main",
+                        WebviewUrl::External(url.parse().expect("Invalid external URL for initial window")),
+                    )
+                    .title("Alien Sync")
+                    .inner_size(800.0, 600.0)
+                    .build()?
+                }
+            };
+
+            // --- Monitor MPV Events ---
+            let app_handle_clone = app_handle.clone(); // Clone AppHandle for the monitor thread
             let player_clone = Arc::clone(&player);
             std::thread::spawn(move || {
                 loop {
                     player_clone.check_events();
                     if player_clone.is_shutdown() {
-                        println!("MPV player shutdown detected by monitor thread.");
-                        let _ = window_clone.close(); // Attempt to close window
+                        println!("MPV player shutdown detected by monitor thread. Exiting application.");
+                        app_handle_clone.exit(0); // Exit the entire application
                         break;
                     }
                     std::thread::sleep(Duration::from_millis(100));
@@ -1039,8 +1108,18 @@ async fn main() {
 
             Ok(())
         })
+        .on_window_event(|window, event| match event {
+            WindowEvent::CloseRequested { .. } => { // Removed `api`
+                if window.label() == "main" { // Only handle main window close
+                    println!("Main window close requested. Allowing close (webview terminates).");
+                    // No hide, no prevent_close. Let it close naturally.
+                } else if window.label() == "background-runner" {
+                    println!("Background runner window close requested (should not happen normally). Ignoring.");
+                    // Optionally prevent close here if needed, but usually unnecessary
+                }
+            }
+            _ => {}
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-
-    println!("Application closing, cleanup likely handled by OS.");
 }

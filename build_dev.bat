@@ -15,9 +15,11 @@ if not exist "%MPV_SOURCE%\libmpv-2.dll" (
 echo Copying MPV DLL to release directory...
 copy /Y "%MPV_SOURCE%\libmpv-2.dll" "src-tauri\target\release\libmpv-2.dll"
 
-:: Generate the lib file from the DLL
-echo Generating MPV lib file...
-powershell -ExecutionPolicy Bypass -File "%MPV_SOURCE%\generate-lib.ps1"
+:: Generate the lib file from the DLL (if not already generated)
+if not exist "%MPV_SOURCE%\libmpv-2.lib" (
+    echo Generating MPV lib file...
+    powershell -ExecutionPolicy Bypass -File "%MPV_SOURCE%\generate-lib.ps1"
+)
 
 :: Run the build
 echo Building application...
