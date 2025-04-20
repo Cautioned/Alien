@@ -68,39 +68,14 @@ jobs:
         shell: pwsh # Use powershell for this step
 
       # === MPV/Linker Setup ===
-      - name: Install/Setup mpv (macOS)
+      - name: Install mpv versions (macOS)
+        # Installs both arm64 (native) and x86_64 (via Rosetta)
         if: startsWith(matrix.platform, 'macos-')
         run: |
-          echo "Installing mpv via Homebrew..."
-          brew install mpv # Installs native arch (arm64 on current runners)
+          echo "Installing mpv via Homebrew (native arch)..."
+          brew install mpv 
           echo "Attempting to install x86_64 mpv via Rosetta..."
-          arch -x86_64 brew install mpv # Installs intel arch (to /usr/local/lib)
-          
-          TARGET_ARCH="${{ matrix.args }}" # Get the target string like --target aarch64-apple-darwin
-          MPV_LIB_PATH=""
-          
-          echo "Build target args: $TARGET_ARCH"
-          
-          if [[ "$TARGET_ARCH" == *"aarch64-apple-darwin"* ]]; then
-            echo "Setting paths for ARM64 build..."
-            MPV_LIB_PATH="$(arch -arm64 brew --prefix mpv)/lib" # Explicitly get arm path
-          elif [[ "$TARGET_ARCH" == *"x86_64-apple-darwin"* ]]; then
-            echo "Setting paths for X86_64 build using /usr/local/lib..."
-            MPV_LIB_PATH="/usr/local/lib" # Hardcode standard Intel Homebrew path
-          else
-            echo "Warning: Could not determine MPV lib path for target $TARGET_ARCH"
-            MPV_LIB_PATH="$(brew --prefix mpv)/lib"
-          fi
-          
-          if [ -z "$MPV_LIB_PATH" ]; then
-            echo "::error::Failed to determine MPV library path for target $TARGET_ARCH"
-            exit 1
-          fi
-          
-          echo "Using MPV library path: $MPV_LIB_PATH"
-          echo "Adding linker search path: $MPV_LIB_PATH"
-          echo "RUSTFLAGS=-L $MPV_LIB_PATH" >> $GITHUB_ENV
-          echo "LIBMPV_LIB_DIR=$MPV_LIB_PATH" >> $GITHUB_ENV
+          arch -x86_64 brew install mpv 
 
       - name: Download libmpv-2.dll (Windows)
         if: matrix.platform == 'windows-latest'
@@ -119,21 +94,34 @@ jobs:
 
       # === Write Private Key Secret to File ===
       - name: Write private key to file
-        # Use shell based on runner platform
         shell: bash
         run: echo "${{ secrets.TAURI_PRIVATE_KEY }}" > ./private.key
         env:
-           # Need to pass the secret to the step's env explicitly if using it directly in run
-           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }} 
+           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+
+      # === Verify Written Key File (DEBUG) ===
+      - name: Check written key file
+        shell: bash
+        run: |
+          echo "Checking ./private.key file..."
+          ls -l ./private.key
+          echo "First 3 lines:"
+          head -n 3 ./private.key
+          echo "--- End Check ---"
 
       # === Tauri Build and Release (Single Step) ===
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # --- Set key variables to use the temporary file path --- 
-          TAURI_PRIVATE_KEY: ./private.key # Pass the path to the key file
-          TAURI_SIGNING_PRIVATE_KEY: ./private.key # Pass the path for v1 compatibility too
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }} # Keep password as secret reference
+          # --- Conditionally set MPV paths for macOS --- 
+          MPV_LIB_PATH: ${{ startsWith(matrix.platform, 'macos-') && contains(matrix.args, 'aarch64') && '/opt/homebrew/lib' || (startsWith(matrix.platform, 'macos-') && contains(matrix.args, 'x86_64') && '/usr/local/lib' || '') }}
+          RUSTFLAGS: ${{ startsWith(matrix.platform, 'macos-') && format('-L {0}', env.MPV_LIB_PATH) || '' }}
+          LIBMPV_LIB_DIR: ${{ env.MPV_LIB_PATH }} # Build script uses this
+          # --- Signing Keys --- 
+          TAURI_PRIVATE_KEY: ./private.key # v2 key path
+          TAURI_SIGNING_PRIVATE_KEY: ./private.key # v1 key path (for compatibility)
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }} # v2 password 
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }} # Also set v1 password var
         with:
           tagName: app-v__VERSION__ # The action automatically replaces __VERSION__ with the app version.
           releaseName: 'App v__VERSION__'
