@@ -71,25 +71,31 @@ jobs:
       - name: Install/Setup mpv (macOS)
         if: startsWith(matrix.platform, 'macos-')
         run: |
-          echo "Installing mpv via Homebrew..."
-          brew install mpv # Installs native arch (arm64 on current runners)
-          echo "Attempting to install x86_64 mpv via Rosetta..."
-          arch -x86_64 brew install mpv # Installs intel arch (to /usr/local/lib)
+          echo "Installing mpv via IINA Homebrew tap..."
+          brew tap iina/homebrew-mpv-iina
+          brew install mpv-iina # Installs native arch (arm64)
+          echo "Attempting to install x86_64 mpv-iina via Rosetta..."
+          arch -x86_64 brew install mpv-iina # Installs intel arch (to /usr/local/lib)
           
           TARGET_ARCH="${{ matrix.args }}" # Get the target string like --target aarch64-apple-darwin
           MPV_LIB_PATH=""
+          CONFIG_CONTENT=""
           
           echo "Build target args: $TARGET_ARCH"
+          mkdir -p .cargo # Ensure .cargo directory exists
           
           if [[ "$TARGET_ARCH" == *"aarch64-apple-darwin"* ]]; then
             echo "Setting paths for ARM64 build..."
-            MPV_LIB_PATH="$(arch -arm64 brew --prefix mpv)/lib" # Explicitly get arm path
+            MPV_LIB_PATH="$(arch -arm64 brew --prefix mpv-iina)/lib" # Use mpv-iina prefix
+            CONFIG_CONTENT="[target.aarch64-apple-darwin]\nrustflags = [\"-L\", \"$MPV_LIB_PATH\"]"
           elif [[ "$TARGET_ARCH" == *"x86_64-apple-darwin"* ]]; then
             echo "Setting paths for X86_64 build using /usr/local/lib..."
-            MPV_LIB_PATH="/usr/local/lib" # Hardcode standard Intel Homebrew path
+            MPV_LIB_PATH="/usr/local/lib" # Standard Intel Homebrew path
+            # We assume `arch -x86_64 brew install mpv-iina` installs here correctly
+            CONFIG_CONTENT="[target.x86_64-apple-darwin]\nrustflags = [\"-L\", \"$MPV_LIB_PATH\"]"
           else
             echo "Warning: Could not determine MPV lib path for target $TARGET_ARCH"
-            MPV_LIB_PATH="$(brew --prefix mpv)/lib"
+            MPV_LIB_PATH="$(brew --prefix mpv-iina)/lib" # Use mpv-iina prefix
           fi
           
           if [ -z "$MPV_LIB_PATH" ]; then
@@ -97,9 +103,15 @@ jobs:
             exit 1
           fi
           
-          echo "Using MPV library path: $MPV_LIB_PATH"
-          echo "Adding linker search path: $MPV_LIB_PATH"
-          echo "RUSTFLAGS=-L $MPV_LIB_PATH" >> $GITHUB_ENV
+          # Create the config file if content was set
+          if [ -n "$CONFIG_CONTENT" ]; then
+            echo "Creating .cargo/config.toml"
+            echo -e "$CONFIG_CONTENT" > .cargo/config.toml
+            cat .cargo/config.toml # Print content for verification
+          fi
+          
+          # Still set LIBMPV_LIB_DIR for the build script (libmpv2-sys)
+          echo "Setting LIBMPV_LIB_DIR=$MPV_LIB_PATH"
           echo "LIBMPV_LIB_DIR=$MPV_LIB_PATH" >> $GITHUB_ENV
 
       - name: Download libmpv-2.dll (Windows)
