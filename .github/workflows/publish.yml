@@ -94,6 +94,13 @@ jobs:
             fi
             MPV_LIB_PATH="$X86_PREFIX/lib"
             echo "Determined x86_64 mpv prefix: $X86_PREFIX"
+            # --- DEBUG: Check the determined path and library --- 
+            echo "Listing contents of x86_64 lib path: $MPV_LIB_PATH"
+            ls -l "$MPV_LIB_PATH"
+            echo "Checking architecture of libmpv.dylib in $MPV_LIB_PATH"
+            file "$MPV_LIB_PATH/libmpv.dylib" || echo "::warning::libmpv.dylib not found at $MPV_LIB_PATH/libmpv.dylib"
+            file "$MPV_LIB_PATH/libmpv.2.dylib" || echo "::warning::libmpv.2.dylib not found at $MPV_LIB_PATH/libmpv.2.dylib"
+            # --- END DEBUG --- 
           else
             echo "::warning::Could not determine MPV lib path for target $TARGET_ARCH. Using native path."
             MPV_LIB_PATH="$(brew --prefix mpv)/lib"
@@ -112,7 +119,8 @@ jobs:
           
           echo "Using MPV library path: $MPV_LIB_PATH"
           echo "Adding linker search path: $MPV_LIB_PATH"
-          echo "RUSTFLAGS=-L $MPV_LIB_PATH" >> $GITHUB_ENV
+          # Quote the path in RUSTFLAGS in case it contains spaces
+          echo "RUSTFLAGS=-L "$MPV_LIB_PATH"" >> $GITHUB_ENV
           echo "LIBMPV_LIB_DIR=$MPV_LIB_PATH" >> $GITHUB_ENV
 
       - name: Download libmpv-2.dll (Windows)
@@ -130,31 +138,14 @@ jobs:
           echo "MPV .lib file generated (hopefully)"
       # === End MPV/Linker Setup ===
 
-      # === Write Private Key Secret to File ===
-      - name: Write private key to file
-        shell: bash
-        run: echo "${{ secrets.TAURI_PRIVATE_KEY }}" > ./private.key
-        env:
-           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-
-      # === Verify Written Key File (DEBUG) ===
-      - name: Check written key file
-        shell: bash
-        run: |
-          echo "Checking ./private.key file..."
-          ls -l ./private.key
-          echo "First 3 lines:"
-          head -n 3 ./private.key
-          echo "--- End Check ---"
-
       # === Tauri Build and Release (Single Step) ===
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # RUSTFLAGS and LIBMPV_LIB_DIR are now set via GITHUB_ENV in the setup step above
           # --- Signing Keys --- 
-          TAURI_PRIVATE_KEY: ./private.key 
-          TAURI_SIGNING_PRIVATE_KEY: ./private.key 
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }} # Use secret directly
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }} # Use secret directly
           # --- Passwords --- 
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }} 
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
