@@ -1,4 +1,4 @@
-use libmpv2::{events::Event, Mpv, Error as LibMpvError};
+use libmpv2::{events::Event, Error as LibMpvError, Mpv};
 use serde_json::{self, json, Value as JsonValue};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -56,7 +56,7 @@ impl MpvPlayer {
         // Create a channel for exit notification
         let (_exit_sender, exit_receiver) = mpsc::channel();
         let quit_flag = Arc::new(AtomicBool::new(false));
-        
+
         // Set essential properties for window visibility and UI
         let essential_opts = [
             ("force-window", "yes"),
@@ -69,7 +69,7 @@ impl MpvPlayer {
             ("osc", "yes"),
             ("osd-level", "2"),
             // Loop settings
-            ("loop-file", "inf"),  // Set infinite looping by default
+            ("loop-file", "inf"),     // Set infinite looping by default
             ("loop-playlist", "inf"), // Also loop playlists
             // ("window-progress-style", "bar"),
             // ("background", "#121212"),
@@ -97,7 +97,7 @@ impl MpvPlayer {
             println!("Release mode scripts path: {:?}", scripts_dir);
             scripts_dir
         };
-        
+
         // Check if scripts directory exists
         if !scripts_dir.exists() {
             println!("Warning: Scripts directory not found at {:?}", scripts_dir);
@@ -129,7 +129,7 @@ impl MpvPlayer {
                     .map(|p| p.to_str().unwrap())
                     .collect::<Vec<_>>()
                     .join(";"); // Use semicolon for Windows
-                
+
                 println!("Loading scripts: {}", script_list);
                 match mpv.set_property("scripts", script_list.as_str()) {
                     Ok(_) => println!("Successfully loaded all scripts"),
@@ -169,52 +169,62 @@ impl MpvPlayer {
 
     pub fn set_property(&self, name: &str, value: &str) -> Result<(), Error> {
         let handle = self.handle.lock()?;
-        
+
         // Special handling for pause property which is critical for syncing
         if name == "pause" {
             // For pause property, try as boolean first
             let bool_value = match value {
                 "yes" | "true" => true,
                 "no" | "false" => false,
-                _ => return Err(Error::PropertyError(
-                    format!("Invalid pause value: {}", value), -1
-                )),
+                _ => {
+                    return Err(Error::PropertyError(
+                        format!("Invalid pause value: {}", value),
+                        -1,
+                    ))
+                }
             };
-            
-            return handle.set_property(name, bool_value)
-                .map_err(|e| Error::PropertyError(
-                    format!("Failed to set property {} to {}: {}", name, value, e), -1
-                ));
+
+            return handle.set_property(name, bool_value).map_err(|e| {
+                Error::PropertyError(
+                    format!("Failed to set property {} to {}: {}", name, value, e),
+                    -1,
+                )
+            });
         }
-        
+
         // Standard property handling for other properties
         handle.set_property(name, value).map_err(|e| {
-            Error::PropertyError(format!("Failed to set property {} to {}: {}", name, value, e), -1)
+            Error::PropertyError(
+                format!("Failed to set property {} to {}: {}", name, value, e),
+                -1,
+            )
         })
     }
 
     pub fn command(&self, cmd: &str, args: &[&str]) -> Result<(), Error> {
         let handle = self.handle.lock()?;
-        
+
         // Special case for play/pause commands that are critical for syncing
         if cmd == "set" && args.len() >= 2 && args[0] == "pause" {
             let pause_value = match args[1] {
                 "yes" | "true" => true,
                 "no" | "false" => false,
-                _ => return Err(Error::CommandError(
-                    format!("Invalid pause value: {}", args[1]), -1
-                )),
+                _ => {
+                    return Err(Error::CommandError(
+                        format!("Invalid pause value: {}", args[1]),
+                        -1,
+                    ))
+                }
             };
-            
-            return handle.set_property("pause", pause_value)
-                .map_err(|e| Error::CommandError(
-                    format!("Failed to set pause to {}: {}", args[1], e), -1
-                ));
+
+            return handle.set_property("pause", pause_value).map_err(|e| {
+                Error::CommandError(format!("Failed to set pause to {}: {}", args[1], e), -1)
+            });
         }
-        
-        handle
-            .command(cmd, args)
-            .map_err(|e| Error::CommandError(format!("Failed to execute command {}: {}", cmd, e), -1))
+
+        handle.command(cmd, args).map_err(|e| {
+            Error::CommandError(format!("Failed to execute command {}: {}", cmd, e), -1)
+        })
     }
 
     // Set offset in seconds - Just stores the value now
@@ -232,7 +242,10 @@ impl MpvPlayer {
         // Convert to milliseconds and store as i64
         let millis = (seconds * 1000.0) as i64;
         self.offset_seconds.store(millis, Ordering::Relaxed);
-        println!("Stored playback offset: {} frames ({} seconds at {} fps, {} ms)", frames, seconds, fps, millis);
+        println!(
+            "Stored playback offset: {} frames ({} seconds at {} fps, {} ms)",
+            frames, seconds, fps, millis
+        );
         Ok(())
     }
 
@@ -252,13 +265,19 @@ impl MpvPlayer {
 
         // Apply offset immediately ONLY if it's significantly non-zero
         // Use a larger threshold (e.g., 0.05s) to avoid seeking near frame 0
-        if offset.abs() > 0.05 { 
+        if offset.abs() > 0.05 {
             // Use a slight delay to ensure file is loaded enough for seek
             std::thread::sleep(std::time::Duration::from_millis(200));
-            println!("Applying significant offset after load: seeking to {} seconds", offset);
+            println!(
+                "Applying significant offset after load: seeking to {} seconds",
+                offset
+            );
             self.command("seek", &[&offset.to_string(), "absolute"])?;
         } else {
-             println!("Offset near zero ({:.3}s), letting MPV start normally.", offset);
+            println!(
+                "Offset near zero ({:.3}s), letting MPV start normally.",
+                offset
+            );
         }
 
         Ok(())
@@ -279,11 +298,12 @@ impl MpvPlayer {
         let idle_active_opt = handle.get_property::<bool>("idle-active").ok();
         let media_title_opt = handle.get_property::<String>("media-title").ok();
 
-        // --- Get FPS --- 
-        let fps_opt = handle.get_property::<f64>("container-fps")
+        // --- Get FPS ---
+        let fps_opt = handle
+            .get_property::<f64>("container-fps")
             .or_else(|_| handle.get_property::<f64>("estimated-vf-fps")) // Fallback
             .ok(); // Store as Option<f64>
-        // --- End Get FPS ---
+                   // --- End Get FPS ---
 
         // Determine overall status string and handle potential None values
         let is_idle = idle_active_opt.unwrap_or(path_opt.is_none()); // Idle if explicit or no path
@@ -306,14 +326,14 @@ impl MpvPlayer {
         // Build the JSON, handling Option types with json! macro support
         Ok(json!({
             "Status": status_str,
-            "Position": adjusted_time_pos, 
-            "Elapsed": adjusted_time_pos, // Legacy field 
+            "Position": adjusted_time_pos,
+            "Elapsed": adjusted_time_pos, // Legacy field
             "Duration": duration_opt,
             "Path": path_opt,
             "Title": media_title_opt.or(path_opt), // Use path as fallback title
-            "Volume": volume_opt.map(|v| v.round()), 
+            "Volume": volume_opt.map(|v| v.round()),
             "Speed": speed_opt,
-            "Loop": loop_file_opt.map_or(false, |l| l == "inf" || l == "yes"), 
+            "Loop": loop_file_opt.map_or(false, |l| l == "inf" || l == "yes"),
             "Offset": current_offset,
             "EndOfFile": eof_reached_opt, // Send Option<String> directly
             "Idle": is_idle, // Send bool directly
@@ -326,7 +346,8 @@ impl MpvPlayer {
         if let Ok(mut handle) = self.handle.lock() {
             let event_context = handle.event_context_mut();
             // Use a short timeout for wait_event to avoid blocking indefinitely if no events
-            while let Some(Ok(event)) = event_context.wait_event(0.01) { // Use 10ms timeout
+            while let Some(Ok(event)) = event_context.wait_event(0.01) {
+                // Use 10ms timeout
                 match event {
                     Event::Shutdown => {
                         println!("MPV_EVENT_SHUTDOWN received");
@@ -339,7 +360,7 @@ impl MpvPlayer {
                 }
             }
         } else {
-            // This path should ideally not be hit often with a blocking lock, 
+            // This path should ideally not be hit often with a blocking lock,
             // but indicates a potential deadlock or poisoned mutex if it is.
             eprintln!("check_events: Failed to acquire MPV lock (potential poison/deadlock?)");
             self.quit_flag.store(true, Ordering::Relaxed); // Assume critical error if lock fails
@@ -361,11 +382,13 @@ impl MpvPlayer {
                     println!("is_shutdown: Failed to get property after lock, assuming shutdown.");
                 }
                 is_unresponsive
-            },
+            }
             Err(_) => {
                 // If we fail to acquire the blocking lock, the mutex is poisoned.
-                eprintln!("is_shutdown: Failed to acquire MPV lock (mutex poisoned?), assuming shutdown");
-                true 
+                eprintln!(
+                    "is_shutdown: Failed to acquire MPV lock (mutex poisoned?), assuming shutdown"
+                );
+                true
             }
         }
     }
@@ -376,7 +399,9 @@ impl MpvPlayer {
         if let Ok(handle) = self.handle.try_lock() {
             let _ = handle.command("quit", &[]);
         } else {
-            eprintln!("exit: Could not acquire MPV lock to send quit command (lock held elsewhere?)");
+            eprintln!(
+                "exit: Could not acquire MPV lock to send quit command (lock held elsewhere?)"
+            );
         }
     }
 
@@ -391,19 +416,26 @@ impl MpvPlayer {
     pub fn set_loop(&self, enabled: bool) -> Result<(), Error> {
         let value = if enabled { "inf" } else { "no" };
         println!("Setting loop to: {}", value);
-        
-        { let handle = self.handle.lock()?; handle.set_property("loop-file", value)?; }
-        { let handle = self.handle.lock()?; handle.set_property("loop-playlist", value)?; }
-        
+
+        {
+            let handle = self.handle.lock()?;
+            handle.set_property("loop-file", value)?;
+        }
+        {
+            let handle = self.handle.lock()?;
+            handle.set_property("loop-playlist", value)?;
+        }
+
         Ok(())
     }
 
     pub fn get_loop(&self) -> Result<bool, Error> {
         let handle = self.handle.lock()?;
-        
-        let loop_state = handle.get_property::<String>("loop-file")
+
+        let loop_state = handle
+            .get_property::<String>("loop-file")
             .map_err(|e| Error::PropertyError(format!("Failed to get loop state: {}", e), -1))?;
-        
+
         Ok(loop_state != "no")
     }
 }

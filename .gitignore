@@ -76,3 +76,6 @@ Desktop.ini
 # roblox
 *.lua
 *.luau
+
+~
+.tauri

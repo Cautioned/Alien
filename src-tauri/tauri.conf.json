@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Alien",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.cautioned.alien",
   "app": {
     "withGlobalTauri": true,
@@ -48,6 +48,16 @@
         "installMode": "currentUser",
         "installerIcon": "icons/icon.ico"
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/cautioned/alien/releases/latest/download/latest.json"
+      ],
+      "dialog": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg5RDRBNTBGNDhEMThFQzMKUldURGp0RklENlhVaWE3aXZVNDhpdDI1SG5QRURkdVFjNDJKenQvTGwrR3Z2RUVjSVVLd2RTZjkK"
     }
   }
 }

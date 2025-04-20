@@ -11,14 +11,21 @@ fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result
 
         // Prevent copying over existing files in the destination (safer)
         if dst_path.exists() {
-            println!("cargo:warning=Skipping existing file during copy: {:?}", dst_path);
+            println!(
+                "cargo:warning=Skipping existing file during copy: {:?}",
+                dst_path
+            );
             continue;
         }
 
         if ty.is_dir() {
             copy_dir_all(entry.path(), dst_path)?;
         } else {
-            println!("cargo:warning=Copying file: {:?} -> {:?}", entry.path(), dst_path);
+            println!(
+                "cargo:warning=Copying file: {:?} -> {:?}",
+                entry.path(),
+                dst_path
+            );
             fs::copy(entry.path(), dst_path)?;
         }
     }
@@ -26,11 +33,11 @@ fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result
 }
 
 fn main() {
-    // --- Start: Restore CSS Build & Favicon Copy Logic --- 
+    // --- Start: Restore CSS Build & Favicon Copy Logic ---
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let manifest_path = Path::new(&manifest_dir);
     let templates_dir = manifest_path.join("templates");
-    
+
     // Ensure the dist directory exists
     let dist_dir = templates_dir.join("dist");
     if let Err(e) = fs::create_dir_all(&dist_dir) {
@@ -39,7 +46,7 @@ fn main() {
 
     // Build the CSS
     println!("cargo:warning=Building CSS...");
-    
+
     // Determine npm command based on platform
     let npm_cmd = if cfg!(target_os = "windows") {
         "npm.cmd" // Use npm.cmd on Windows
@@ -61,7 +68,7 @@ fn main() {
 
     for npm_path in npm_locations {
         println!("cargo:warning=Trying npm at: {}", npm_path);
-        
+
         // Run npm run build:css directly (no install)
         match std::process::Command::new(&npm_path)
             .current_dir(&templates_dir)
@@ -71,26 +78,34 @@ fn main() {
         {
             Ok(css_output) => {
                 if css_output.status.success() {
-                    println!("cargo:warning=CSS build output: {}", String::from_utf8_lossy(&css_output.stdout));
+                    println!(
+                        "cargo:warning=CSS build output: {}",
+                        String::from_utf8_lossy(&css_output.stdout)
+                    );
                     success = true;
                     break; // Success, exit loop
                 } else {
-                    last_error = format!("CSS build failed using '{}': {}\nStdout: {}\nStderr: {}", 
-                                       npm_path, 
-                                       css_output.status, 
-                                       String::from_utf8_lossy(&css_output.stdout),
-                                       String::from_utf8_lossy(&css_output.stderr));
+                    last_error = format!(
+                        "CSS build failed using '{}': {}\nStdout: {}\nStderr: {}",
+                        npm_path,
+                        css_output.status,
+                        String::from_utf8_lossy(&css_output.stdout),
+                        String::from_utf8_lossy(&css_output.stderr)
+                    );
                 }
             }
             Err(e) => {
-                 last_error = format!("Failed to run command '{}': {}", npm_path, e);
-                 // If the command itself failed to run (e.g., not found), continue to next path
+                last_error = format!("Failed to run command '{}': {}", npm_path, e);
+                // If the command itself failed to run (e.g., not found), continue to next path
             }
         }
     }
 
     if !success {
-        panic!("Failed to build CSS after trying all npm locations. Last error: {}", last_error);
+        panic!(
+            "Failed to build CSS after trying all npm locations. Last error: {}",
+            last_error
+        );
     }
 
     // Verify the CSS file was created
@@ -108,12 +123,17 @@ fn main() {
     let favicon_src = manifest_path.join("icons").join("icon.ico");
     let favicon_dst = templates_dir.join("favicon.ico");
     // Copy only if destination doesn't exist or source is newer
-    let should_copy = !favicon_dst.exists() || 
-                      fs::metadata(&favicon_src).ok().zip(fs::metadata(&favicon_dst).ok())
-                      .map_or(true, |(src_meta, dst_meta)| {
-                          src_meta.modified().ok().zip(dst_meta.modified().ok())
-                          .map_or(false, |(src_time, dst_time)| src_time > dst_time)
-                      });
+    let should_copy = !favicon_dst.exists()
+        || fs::metadata(&favicon_src)
+            .ok()
+            .zip(fs::metadata(&favicon_dst).ok())
+            .map_or(true, |(src_meta, dst_meta)| {
+                src_meta
+                    .modified()
+                    .ok()
+                    .zip(dst_meta.modified().ok())
+                    .map_or(false, |(src_time, dst_time)| src_time > dst_time)
+            });
 
     if should_copy {
         if let Err(e) = fs::copy(&favicon_src, &favicon_dst) {
@@ -122,13 +142,13 @@ fn main() {
             println!("cargo:warning=Favicon copied successfully");
         }
     } else {
-         println!("cargo:warning=Skipping favicon copy, destination is up-to-date.");
+        println!("cargo:warning=Skipping favicon copy, destination is up-to-date.");
     }
 
     // Tell Cargo to re-run only when relevant source files change
     println!("cargo:rerun-if-changed=templates/src");
     println!("cargo:rerun-if-changed=templates/tailwind.config.js");
-    // --- End: Restore CSS Build & Favicon Copy Logic --- 
+    // --- End: Restore CSS Build & Favicon Copy Logic ---
 
     tauri_build::build();
 
@@ -136,22 +156,28 @@ fn main() {
     if cfg!(target_os = "windows") {
         let windows_manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
         let windows_manifest_path = PathBuf::from(&windows_manifest_dir);
-        
+
         // --- Scripts copy logic ---
         let scripts_src = windows_manifest_path.join("scripts");
-        let scripts_dst = windows_manifest_path.join("scripts"); 
+        let scripts_dst = windows_manifest_path.join("scripts");
         if scripts_src.exists() {
-             if let Err(e) = fs::create_dir_all(&scripts_dst) { 
-                  println!("cargo:warning=Failed to create scripts destination directory: {}", e);
-             } else {
-                  if let Err(e) = copy_dir_all(&scripts_src, &scripts_dst) {
-                       println!("cargo:warning=Failed to copy scripts directory: {}", e);
-                  } else {
-                       println!("cargo:warning=Scripts directory copied successfully");
-                  }
-             }
+            if let Err(e) = fs::create_dir_all(&scripts_dst) {
+                println!(
+                    "cargo:warning=Failed to create scripts destination directory: {}",
+                    e
+                );
+            } else {
+                if let Err(e) = copy_dir_all(&scripts_src, &scripts_dst) {
+                    println!("cargo:warning=Failed to copy scripts directory: {}", e);
+                } else {
+                    println!("cargo:warning=Scripts directory copied successfully");
+                }
+            }
         } else {
-             println!("cargo:warning=Scripts source directory not found at {:?}", scripts_src);
+            println!(
+                "cargo:warning=Scripts source directory not found at {:?}",
+                scripts_src
+            );
         }
         // --- End Scripts copy logic ---
     }

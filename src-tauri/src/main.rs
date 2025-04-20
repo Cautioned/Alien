@@ -11,32 +11,29 @@ use axum::{
     Router,
 };
 use mpv::MpvPlayer;
+use once_cell::sync::Lazy;
+use portpicker::pick_unused_port;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use serde_json::Value as JsonValue;
+use std::collections::HashSet;
 use std::fs::{self, File};
+use std::io::ErrorKind;
 use std::io::{Read, Write};
+use std::path::{Path as StdPath, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tauri::{
+    menu::{MenuBuilder, MenuItemBuilder},
+    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Manager, WebviewUrl, WindowEvent,
+};
 use tokio::time::{interval, MissedTickBehavior};
 use tower_http::cors::{Any, CorsLayer};
-use tauri::{
-    AppHandle,
-    Manager,
-    WebviewUrl,
-    WindowEvent,
-    menu::{MenuBuilder, MenuItemBuilder},
-    tray::{TrayIconBuilder, TrayIconEvent, MouseButton},
-};
-use portpicker::pick_unused_port;
-use once_cell::sync::Lazy;
 use tower_http::services::ServeDir;
-use std::path::{PathBuf, Path as StdPath};
-use serde_json::Value as JsonValue;
-use std::collections::HashSet;
-use std::io::ErrorKind;
 
-// --- Configuration Handling --- 
+// --- Configuration Handling ---
 const CONFIG_FILE_NAME: &str = "alien_config.json";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -51,8 +48,12 @@ impl Default for AppConfig {
 }
 
 fn get_config_path(app_handle: &AppHandle) -> std::io::Result<PathBuf> {
-    let config_dir = app_handle.path().app_config_dir()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, format!("App config directory not found: {}", e)))?;
+    let config_dir = app_handle.path().app_config_dir().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("App config directory not found: {}", e),
+        )
+    })?;
     // Ensure the config directory exists
     fs::create_dir_all(&config_dir)?;
     Ok(config_dir.join(CONFIG_FILE_NAME))
@@ -70,9 +71,12 @@ fn load_config(app_handle: &AppHandle) -> AppConfig {
                                 Ok(config) => {
                                     println!("Loaded config from {:?}: {:?}", path, config);
                                     config
-                                },
+                                }
                                 Err(e) => {
-                                    eprintln!("Failed to parse config file {:?}: {}. Using default.", path, e);
+                                    eprintln!(
+                                        "Failed to parse config file {:?}: {}. Using default.",
+                                        path, e
+                                    );
                                     AppConfig::default()
                                 }
                             }
@@ -82,7 +86,10 @@ fn load_config(app_handle: &AppHandle) -> AppConfig {
                         }
                     }
                     Err(e) => {
-                        eprintln!("Failed to open config file {:?}: {}. Using default.", path, e);
+                        eprintln!(
+                            "Failed to open config file {:?}: {}. Using default.",
+                            path, e
+                        );
                         AppConfig::default()
                     }
                 }
@@ -112,7 +119,7 @@ fn save_config(app_handle: &AppHandle, config: &AppConfig) -> std::io::Result<()
 struct AppState {
     player: Arc<MpvPlayer>,
     port: u16,
-    last_seek: Arc<AtomicU64>, // Track last seek time
+    last_seek: Arc<AtomicU64>,                  // Track last seek time
     config: Arc<tokio::sync::Mutex<AppConfig>>, // Add config to AppState
 }
 
@@ -155,7 +162,7 @@ async fn set_port_and_restart(
     drop(config_guard);
     println!("Configuration saved. Attempting to restart application...");
     state.player.exit();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
 
     // Call restart. This terminates the process if successful.
     app_handle.restart();
@@ -179,14 +186,14 @@ async fn reset_port_and_restart(
     drop(config_guard);
     println!("Configuration saved for reset. Attempting to restart application...");
     state.player.exit();
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
 
     // Call restart. This terminates the process if successful.
     app_handle.restart();
     // No code needed here.
 }
 
-// --- New Command: Clear Saved Port (No Restart) --- 
+// --- New Command: Clear Saved Port (No Restart) ---
 #[tauri::command]
 async fn clear_saved_port(
     app_handle: tauri::AppHandle,
@@ -201,7 +208,10 @@ async fn clear_saved_port(
     config_guard.port = None; // Set to None for auto-detect on next launch
     if let Err(e) = save_config(&app_handle, &config_guard) {
         eprintln!("Failed to save config for port clear: {}", e);
-        return Err(format!("Failed to save configuration for port clear: {}", e));
+        return Err(format!(
+            "Failed to save configuration for port clear: {}",
+            e
+        ));
     }
     println!("Saved port configuration cleared. Will use auto-detect on next launch.");
     Ok(())
@@ -214,36 +224,42 @@ async fn control_player(
     let cmd_result = match action.as_str() {
         "play" => {
             // First check if player is paused
-            let handle = state.player.get_handle()
+            let handle = state
+                .player
+                .get_handle()
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             let is_paused = handle.get_property::<bool>("pause").unwrap_or(false);
-            
+
             if is_paused {
                 // Use direct set_property with bool value for better compatibility
-                handle.set_property("pause", false)
+                handle
+                    .set_property("pause", false)
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 Ok(())
             } else {
                 // Already playing, just return success
                 Ok(())
             }
-        },
+        }
         "pause" => {
             // First check if player is playing
-            let handle = state.player.get_handle()
+            let handle = state
+                .player
+                .get_handle()
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             let is_paused = handle.get_property::<bool>("pause").unwrap_or(false);
-            
+
             if !is_paused {
                 // Use direct set_property with bool value for better compatibility
-                handle.set_property("pause", true)
+                handle
+                    .set_property("pause", true)
                     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
                 Ok(())
             } else {
                 // Already paused, just return success
                 Ok(())
             }
-        },
+        }
         "stop" => state.player.command("stop", &[]),
         "volume_up" => state.player.command("add", &["volume", "5"]),
         "volume_down" => state.player.command("add", &["volume", "-5"]),
@@ -265,7 +281,11 @@ async fn ws_handler(
 }
 
 // Helper to send JSON error messages over WebSocket
-async fn send_ws_error(socket: &mut axum::extract::ws::WebSocket, command: &str, error_message: &str) {
+async fn send_ws_error(
+    socket: &mut axum::extract::ws::WebSocket,
+    command: &str,
+    error_message: &str,
+) {
     use axum::extract::ws::Message;
     let error_json = json!({
         "status": "error",
@@ -277,14 +297,14 @@ async fn send_ws_error(socket: &mut axum::extract::ws::WebSocket, command: &str,
             eprintln!("Failed to send WebSocket error message");
         }
     } else {
-         eprintln!("Failed to serialize error message");
+        eprintln!("Failed to serialize error message");
     }
 }
 
 async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<AppState>) {
     use axum::extract::ws::Message;
-    use tokio::time::{sleep, Instant};
     use std::sync::atomic::Ordering;
+    use tokio::time::{sleep, Instant};
 
     // --- Dynamic Interval Logic ---
     const PLAYING_STATUS_INTERVAL: Duration = Duration::from_millis(100); // Faster when playing
@@ -293,7 +313,7 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<AppS
     let mut status_interval = interval(current_interval_duration);
     status_interval.set_missed_tick_behavior(MissedTickBehavior::Delay); // Prevent burst ticks after delay
     let mut last_known_pause_state = false; // Track pause state to adjust interval
-    // --- End Dynamic Interval Logic ---
+                                            // --- End Dynamic Interval Logic ---
 
     // Constants for connection management
     const PING_INTERVAL: Duration = Duration::from_secs(15);
@@ -309,23 +329,34 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<AppS
     let mut consecutive_errors = 0;
     let last_status_update = Arc::new(AtomicU64::new(0));
 
-    // --- State for Conditional Updates --- 
+    // --- State for Conditional Updates ---
     let mut last_sent_status: Option<JsonValue> = None; // Store the last sent status object
-    // Define keys whose changes trigger an update
+                                                        // Define keys whose changes trigger an update
     let relevant_keys: HashSet<String> = [
-        "Status", "Position", "Duration", "Path", "Title", "Loop", "Offset", "EndOfFile", "Idle"
-    ].iter().map(|s| s.to_string()).collect();
+        "Status",
+        "Position",
+        "Duration",
+        "Path",
+        "Title",
+        "Loop",
+        "Offset",
+        "EndOfFile",
+        "Idle",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
 
-    // --- Buffers --- 
+    // --- Buffers ---
     let mut status_buffer = String::with_capacity(1024);
 
     'connection: loop {
-        // --- Check for MPV Shutdown --- 
+        // --- Check for MPV Shutdown ---
         if state.player.is_shutdown() {
             eprintln!("MPV shutdown detected by handle_socket, closing WebSocket.");
             let _ = socket.close().await; // Attempt graceful close
-                    break 'connection;
-                }
+            break 'connection;
+        }
         // --- End Check for MPV Shutdown ---
 
         tokio::select! {
@@ -532,7 +563,7 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<AppS
                 }
             }
 
-            // --- Status Update Tick --- 
+            // --- Status Update Tick ---
             _ = status_interval.tick() => {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -545,7 +576,7 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<AppS
 
                 match state.player.get_status() {
                     Ok(current_status) => {
-                        // --- Check if status changed --- 
+                        // --- Check if status changed ---
                         let mut should_send = true; // Send first time or if comparison fails
                         if let Some(last_status) = &last_sent_status {
                             // Compare only relevant keys for changes
@@ -553,7 +584,7 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<AppS
                                 current_status.get(key) != last_status.get(key)
                             });
                         }
-                        // --- End Check --- 
+                        // --- End Check ---
 
                         if should_send {
                             status_buffer.clear();
@@ -605,7 +636,7 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: Arc<AppS
                 }
             }
 
-            // --- Ping Tick --- 
+            // --- Ping Tick ---
             _ = ping_interval.tick() => {
                 if last_pong.elapsed() > PING_TIMEOUT {
                     eprintln!("WebSocket ping timeout, closing connection.");
@@ -631,15 +662,16 @@ async fn status_page(
     AxumState(state): AxumState<Arc<AppState>>,
 ) -> Result<Html<String>, (StatusCode, String)> {
     // Cache the HTML template
-    static HTML_TEMPLATE: Lazy<String> = Lazy::new(|| {
-        include_str!("../templates/status.html").to_string()
-    });
+    static HTML_TEMPLATE: Lazy<String> =
+        Lazy::new(|| include_str!("../templates/status.html").to_string());
 
     // Get the current port from the state
     let current_port = state.port;
     // Get the configured port (if any) for display
     let config = state.config.lock().await;
-    let configured_port_str = config.port.map_or("Auto (Default: 3000)".to_string(), |p| p.to_string());
+    let configured_port_str = config
+        .port
+        .map_or("Auto (Default: 3000)".to_string(), |p| p.to_string());
     drop(config);
 
     // Replace placeholders with actual values
@@ -671,7 +703,9 @@ async fn sync() -> Json<serde_json::Value> {
 async fn get_playback_time(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let handle = state.player.get_handle()
+    let handle = state
+        .player
+        .get_handle()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let time = handle
         .get_property::<f64>("time-pos")
@@ -690,7 +724,7 @@ async fn set_playback_time(
     AxumState(state): AxumState<Arc<AppState>>,
     Json(payload): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    const MIN_SEEK_INTERVAL: u64 = 50; 
+    const MIN_SEEK_INTERVAL: u64 = 50;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -702,27 +736,35 @@ async fn set_playback_time(
             // Check if a path is loaded. If get_property fails, assume idle.
             if handle.get_property::<String>("path").is_err() {
                 let time = payload["time"].as_f64().unwrap_or(-1.0); // Get time for logging if possible
-                println!("HTTP seek: Player is idle (no path property), ignoring seek request to {}.", time);
-        return Ok(Json(json!({
-                    "status": "success",
-                    "ignored": true, 
-                    "reason": "Player is idle (no media loaded)",
-                    "time": time, // Include requested time in response
-                    "timestamp": now
-        })));
+                println!(
+                    "HTTP seek: Player is idle (no path property), ignoring seek request to {}.",
+                    time
+                );
+                return Ok(Json(json!({
+                            "status": "success",
+                            "ignored": true,
+                            "reason": "Player is idle (no media loaded)",
+                            "time": time, // Include requested time in response
+                            "timestamp": now
+                })));
             }
             // If path exists, proceed with the seek logic
         }
         Err(e) => {
             // Failed to get handle, this is a more significant error
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get MPV handle: {}", e)));
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get MPV handle: {}", e),
+            ));
         }
     }
     // --- End Idle Check ---
 
     // Rate limit check (only apply if not idle)
     if now - state.last_seek.load(Ordering::Relaxed) < MIN_SEEK_INTERVAL {
-        return Ok(Json(json!({ "status": "rate_limited", "message": "Too many seek requests" })));
+        return Ok(Json(
+            json!({ "status": "rate_limited", "message": "Too many seek requests" }),
+        ));
     }
 
     // Get time from payload
@@ -736,25 +778,37 @@ async fn set_playback_time(
     let adjusted_time = time + offset;
 
     // Attempt seek command (should succeed if we passed the idle check)
-    println!("HTTP seek: Attempting seek to {} (adjusted from {} with offset {})", adjusted_time, time, offset);
-    match state.player.command("seek", &[&adjusted_time.to_string(), "absolute"]) {
+    println!(
+        "HTTP seek: Attempting seek to {} (adjusted from {} with offset {})",
+        adjusted_time, time, offset
+    );
+    match state
+        .player
+        .command("seek", &[&adjusted_time.to_string(), "absolute"])
+    {
         Ok(_) => {
             // Seek succeeded
-    state.last_seek.store(now, Ordering::Relaxed);
-    Ok(Json(json!({
-        "status": "success",
-                "ignored": false, 
-        "time": time,
-        "adjusted_time": adjusted_time,
-        "offset": offset,
-        "timestamp": now
-    })))
+            state.last_seek.store(now, Ordering::Relaxed);
+            Ok(Json(json!({
+                "status": "success",
+                        "ignored": false,
+                "time": time,
+                "adjusted_time": adjusted_time,
+                "offset": offset,
+                "timestamp": now
+            })))
         }
         Err(e) => {
             // If seek fails even after the idle check, it's an unexpected error
             let error_string = e.to_string();
-            eprintln!("Error executing MPV seek command even after idle check: {}", error_string);
-            Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Seek command failed unexpectedly: {}", error_string)))
+            eprintln!(
+                "Error executing MPV seek command even after idle check: {}",
+                error_string
+            );
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Seek command failed unexpectedly: {}", error_string),
+            ))
         }
     }
 }
@@ -775,7 +829,7 @@ async fn get_connection_status(
     let eof_reached = get_str("EndOfFile") == "yes";
     let is_idle = get_str("Idle") == "yes";
     // Check Status property for play/pause state as reported by get_status
-    let is_paused = get_str("Status") == "Paused"; 
+    let is_paused = get_str("Status") == "Paused";
     let duration = get_f64("Duration");
     // Use the adjusted position reported by get_status
     let position = get_f64("Position");
@@ -803,22 +857,29 @@ async fn set_offset(
     Json(payload): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     // Removed file reload and delayed commands
-    
+
     // Handle both seconds and frames offsets
     let offset_seconds = if let Some(seconds) = payload.get("seconds").and_then(|v| v.as_f64()) {
-        state.player.set_offset_seconds(seconds)
+        state
+            .player
+            .set_offset_seconds(seconds)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         seconds
     } else if let Some(frames) = payload.get("frames").and_then(|v| v.as_i64()) {
         // Default to 30 fps if not specified
         let fps = payload.get("fps").and_then(|v| v.as_f64()).unwrap_or(30.0);
-        
-        state.player.set_offset_frames(frames as i32, fps)
+
+        state
+            .player
+            .set_offset_frames(frames as i32, fps)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        
+
         (frames as f64) / fps
     } else {
-        return Err((StatusCode::BAD_REQUEST, "Missing 'seconds' or 'frames' parameter".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Missing 'seconds' or 'frames' parameter".to_string(),
+        ));
     };
 
     // Just updating the internal offset is sufficient now.
@@ -835,7 +896,7 @@ async fn get_offset(
     AxumState(state): AxumState<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let offset_seconds = state.player.get_offset_seconds();
-    
+
     Ok(Json(json!({
         "status": "success",
         "offset_seconds": offset_seconds
@@ -848,13 +909,16 @@ async fn set_loop(
     Json(payload): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     // Get loop setting from payload
-    let enabled = payload.get("enabled")
-        .and_then(|v| v.as_bool())
-        .ok_or((StatusCode::BAD_REQUEST, "Missing or invalid 'enabled' field".to_string()))?;
-    
-    state.player.set_loop(enabled)
+    let enabled = payload.get("enabled").and_then(|v| v.as_bool()).ok_or((
+        StatusCode::BAD_REQUEST,
+        "Missing or invalid 'enabled' field".to_string(),
+    ))?;
+
+    state
+        .player
+        .set_loop(enabled)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     Ok(Json(json!({
         "status": "success",
         "loop_enabled": enabled
@@ -864,9 +928,11 @@ async fn set_loop(
 async fn get_loop(
     AxumState(state): AxumState<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let loop_enabled = state.player.get_loop()
+    let loop_enabled = state
+        .player
+        .get_loop()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    
+
     Ok(Json(json!({
         "status": "success",
         "loop_enabled": loop_enabled
@@ -876,7 +942,9 @@ async fn get_loop(
 // --- Start: Restore find_templates_dir helper ---
 fn find_templates_dir() -> PathBuf {
     // Executable directory
-    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.to_path_buf()));
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()));
     // Current working directory
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     // Cargo manifest dir (compile‑time)
@@ -906,7 +974,10 @@ fn find_templates_dir() -> PathBuf {
 
     // Fallback if nothing found
     let fallback = cwd.join("src-tauri/templates"); // Should ideally not be reached in prod
-    println!("Templates directory not found in expected locations, falling back to {:?}", fallback);
+    println!(
+        "Templates directory not found in expected locations, falling back to {:?}",
+        fallback
+    );
     fallback
 }
 // --- End: Restore find_templates_dir helper ---
@@ -916,6 +987,7 @@ async fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             sync_room,
             exit_app,
@@ -1076,8 +1148,11 @@ async fn main() {
              .inner_size(1.0, 1.0) // Minimal size
              .build()?;
 
+            // --- Register Updater Plugin (Correct Way) ---
+            app.handle().plugin(tauri_plugin_updater::Builder::default().build())?;
+
             // --- Create Initial Main Window (Using External URL) ---
-            let main_window = match app.get_webview_window("main") {
+            let _main_window = match app.get_webview_window("main") {
                 Some(win) => win, // Should ideally not exist yet, but handle defensively
                 None => {
                     tauri::WebviewWindowBuilder::new(

@@ -51,3 +51,6 @@ strip = true       # Remove debug symbols
 opt-level = 0      # Basic optimizations without significantly impacting compile time
 debug = true       # Keep debug info for development
 
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
+
