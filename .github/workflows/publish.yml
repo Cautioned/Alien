@@ -88,12 +88,21 @@ jobs:
               echo "::error::Failed to install x86_64 Homebrew into /usr/local."
               exit 1
             fi
-            echo "Successfully installed x86_64 Homebrew."
+            echo "Successfully initiated x86_64 Homebrew installation."
             
-            echo "Attempting to install x86_64 mpv using /usr/local/bin/brew..."
-            # Use the x86_64 brew executable explicitly
-            if ! arch -x86_64 /usr/local/bin/brew install mpv; then
-              echo "::error::Failed to install x86_64 mpv using /usr/local/bin/brew."
+            # --- DEBUG: Verify x86_64 Homebrew installation --- 
+            echo "Checking existence of /usr/local/bin/brew:"
+            ls -l /usr/local/bin/brew
+            echo "Running config for /usr/local/bin/brew:"
+            arch -x86_64 /usr/local/bin/brew config || echo '::warning::Failed to run brew config for x86_64 brew'
+            # --- END DEBUG --- 
+            
+            echo "Attempting to install x86_64 mpv using /usr/local/bin/brew with explicit PATH..."
+            # Use the x86_64 brew executable explicitly and set PATH
+            if ! arch -x86_64 env PATH="/usr/local/bin:$PATH" /usr/local/bin/brew install mpv; then
+              echo "::error::Failed to install x86_64 mpv using /usr/local/bin/brew with explicit PATH."
+              # Add specific logs from brew if possible
+              # cat /Users/runner/Library/Logs/Homebrew/mpv/01.configure.cc # Example log path, might vary
               exit 1
             fi
             echo "Successfully installed x86_64 mpv."
