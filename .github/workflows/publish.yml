@@ -73,9 +73,9 @@ jobs:
         run: |
           echo "Installing mpv via IINA Homebrew tap..."
           brew tap iina/homebrew-mpv-iina
-          brew install mpv-iina # Installs native arch (arm64)
+          brew install --HEAD mpv-iina # Installs native arch (arm64)
           echo "Attempting to install x86_64 mpv-iina via Rosetta..."
-          arch -x86_64 brew install mpv-iina # Installs intel arch (to /usr/local/lib)
+          arch -x86_64 brew install --HEAD mpv-iina # Installs intel arch (to /usr/local/lib)
           
           TARGET_ARCH="${{ matrix.args }}" # Get the target string like --target aarch64-apple-darwin
           MPV_LIB_PATH=""
