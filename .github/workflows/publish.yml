@@ -86,16 +86,27 @@ jobs:
             MPV_LIB_PATH="/opt/homebrew/lib" # Standard ARM Homebrew path
           elif [[ "$TARGET_ARCH" == *"x86_64-apple-darwin"* ]]; then
             echo "Setting paths for X86_64 build..."
-            MPV_LIB_PATH="/usr/local/lib" # Standard Intel Homebrew path
+            # Determine the prefix for the x86_64 install via Rosetta
+            X86_PREFIX=$(arch -x86_64 brew --prefix mpv)
+            if [ -z "$X86_PREFIX" ]; then
+              echo "::error::Failed to get Homebrew prefix for x86_64 mpv."
+              exit 1
+            fi
+            MPV_LIB_PATH="$X86_PREFIX/lib"
+            echo "Determined x86_64 mpv prefix: $X86_PREFIX"
           else
             echo "::warning::Could not determine MPV lib path for target $TARGET_ARCH. Using native path."
             MPV_LIB_PATH="$(brew --prefix mpv)/lib"
           fi
           
+          echo "Attempting to use MPV library path: $MPV_LIB_PATH"
+          
           if [ -z "$MPV_LIB_PATH" ] || [ ! -d "$MPV_LIB_PATH" ]; then
             echo "::error::Failed to determine or find valid MPV library path: $MPV_LIB_PATH for target $TARGET_ARCH"
+            echo "Listing /opt/homebrew/lib..."
             ls -l /opt/homebrew/lib || true # List contents for debugging
-            ls -l /usr/local/lib || true  # List contents for debugging
+            echo "Listing resolved x86_64 path ($MPV_LIB_PATH)..."
+            ls -l "$MPV_LIB_PATH" || true  # List contents for debugging
             exit 1
           fi
           
