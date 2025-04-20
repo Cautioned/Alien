@@ -68,50 +68,57 @@ jobs:
         shell: pwsh # Use powershell for this step
 
       # === MPV/Linker Setup ===
-      - name: Download and Setup pre-compiled mpv (macOS)
+      - name: Install/Setup mpv (macOS)
         if: startsWith(matrix.platform, 'macos-')
         run: |
-          TARGET_ARCH_LONG="${{ matrix.args }}" # e.g., --target aarch64-apple-darwin
-          MPV_VERSION="20250407" # From the release tag
-          DOWNLOAD_URL=""
-          TARGET_ARCH_SHORT=""
+          echo "Installing ARM mpv-iina via Homebrew tap..."
+          brew tap iina/homebrew-mpv-iina
+          brew install --HEAD mpv-iina # Installs native arch (arm64) - keg-only
           
-          if [[ "$TARGET_ARCH_LONG" == *"aarch64-apple-darwin"* ]]; then
-            echo "Configuring for ARM64 pre-compiled binary..."
-            TARGET_ARCH_SHORT="arm64"
-          elif [[ "$TARGET_ARCH_LONG" == *"x86_64-apple-darwin"* ]]; then
-            echo "Configuring for X86_64 pre-compiled binary..."
-            TARGET_ARCH_SHORT="x86_64"
+          echo "Attempting to install standard x86_64 mpv via Rosetta..."
+          arch -x86_64 brew install mpv # Installs standard intel mpv (to /usr/local/lib)
+          
+          TARGET_ARCH="${{ matrix.args }}" # Get the target string like --target aarch64-apple-darwin
+          MPV_LIB_PATH=""
+          CONFIG_CONTENT=""
+          
+          echo "Build target args: $TARGET_ARCH"
+          mkdir -p .cargo # Ensure .cargo directory exists
+          
+          if [[ "$TARGET_ARCH" == *"aarch64-apple-darwin"* ]]; then
+            echo "Setting paths for ARM64 build..."
+            MPV_LIB_PATH="/opt/homebrew/opt/mpv-iina/lib" 
+            CONFIG_CONTENT="[target.aarch64-apple-darwin]\nrustflags = [\"-L\", \"$MPV_LIB_PATH\"]"
+          elif [[ "$TARGET_ARCH" == *"x86_64-apple-darwin"* ]]; then
+            echo "Setting dynamic_lookup for X86_64 build..."
+            MPV_LIB_PATH="/usr/local/lib" # Expected runtime path for LIBMPV_LIB_DIR
+            CONFIG_CONTENT="[target.x86_64-apple-darwin]\nrustflags = [\"-C\", \"link-arg=-undefined\", \"-C\", \"link-arg=dynamic_lookup\"]"
           else
-            echo "::error::Unsupported macOS target architecture: $TARGET_ARCH_LONG"
-            exit 1
+            echo "Warning: Could not determine MPV lib path for target $TARGET_ARCH. Defaulting to ARM keg path."
+            MPV_LIB_PATH="/opt/homebrew/opt/mpv-iina/lib"
           fi
           
-          # Construct Download URL (Update tag/version as needed)
-          DOWNLOAD_URL="https://github.com/eko5624/mpv-mac/releases/download/${MPV_VERSION}/mpv-mac-${TARGET_ARCH_SHORT}-${MPV_VERSION}.tar.gz"
-          EXTRACT_DIR="./mpv-build-${TARGET_ARCH_SHORT}"
-          MPV_LIB_PATH="$EXTRACT_DIR/lib"
-          CONFIG_FILE_PATH=".cargo/config.toml"
+          if [ -z "$MPV_LIB_PATH" ]; then
+            echo "::error::Failed to determine MPV library path for target $TARGET_ARCH"
+            exit 1
+          fi
 
-          echo "Downloading from $DOWNLOAD_URL"
-          curl -Lf "$DOWNLOAD_URL" -o mpv-build.tar.gz
+          # Add some debug checks for library existence
+          echo "Checking ARM path: /opt/homebrew/opt/mpv-iina/lib"
+          ls -l /opt/homebrew/opt/mpv-iina/lib || echo "ARM Path listing failed (might be ok if not ARM build)"
+          echo "Checking Intel path: /usr/local/opt/mpv-iina/lib"
+          ls -l /usr/local/opt/mpv-iina/lib || echo "Intel Path listing failed (might be ok if not Intel build)"
           
-          echo "Extracting to $EXTRACT_DIR"
-          mkdir -p "$EXTRACT_DIR"
-          tar -xzf mpv-build.tar.gz -C "$EXTRACT_DIR" --strip-components=1 # Adjust strip-components if needed based on archive structure
-          rm mpv-build.tar.gz # Clean up archive
+          # Create the config file if content was set
+          if [ -n "$CONFIG_CONTENT" ]; then
+            echo "Creating .cargo/config.toml"
+            echo -e "$CONFIG_CONTENT" > .cargo/config.toml
+            cat .cargo/config.toml # Print content for verification
+          fi
           
-          # --- Configure Cargo --- 
-          mkdir -p .cargo # Ensure .cargo directory exists
-          echo "Creating $CONFIG_FILE_PATH for $TARGET_ARCH_SHORT"
-          CONFIG_CONTENT="[target.${TARGET_ARCH_LONG#--target }]
-rustflags = [\"-L\", \"${PWD}/${MPV_LIB_PATH}\"]" # Use full path for linker
-          echo -e "$CONFIG_CONTENT" > "$CONFIG_FILE_PATH"
-          cat "$CONFIG_FILE_PATH"
-          
-          # --- Configure libmpv2-sys --- 
-          echo "Setting LIBMPV_LIB_DIR=$PWD/$MPV_LIB_PATH"
-          echo "LIBMPV_LIB_DIR=$PWD/$MPV_LIB_PATH" >> $GITHUB_ENV
+          # Still set LIBMPV_LIB_DIR for the build script (libmpv2-sys)
+          echo "Setting LIBMPV_LIB_DIR=$MPV_LIB_PATH"
+          echo "LIBMPV_LIB_DIR=$MPV_LIB_PATH" >> $GITHUB_ENV
 
       - name: Download libmpv-2.dll (Windows)
         if: matrix.platform == 'windows-latest'
