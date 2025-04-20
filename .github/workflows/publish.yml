@@ -68,14 +68,41 @@ jobs:
         shell: pwsh # Use powershell for this step
 
       # === MPV/Linker Setup ===
-      - name: Install mpv versions (macOS)
-        # Installs both arm64 (native) and x86_64 (via Rosetta)
+      - name: Install/Setup mpv (macOS)
         if: startsWith(matrix.platform, 'macos-')
         run: |
           echo "Installing mpv via Homebrew (native arch)..."
           brew install mpv 
           echo "Attempting to install x86_64 mpv via Rosetta..."
           arch -x86_64 brew install mpv 
+          
+          TARGET_ARCH="${{ matrix.args }}" # Get the target string
+          MPV_LIB_PATH=""
+          
+          echo "Build target args: $TARGET_ARCH"
+          
+          if [[ "$TARGET_ARCH" == *"aarch64-apple-darwin"* ]]; then
+            echo "Setting paths for ARM64 build..."
+            MPV_LIB_PATH="/opt/homebrew/lib" # Standard ARM Homebrew path
+          elif [[ "$TARGET_ARCH" == *"x86_64-apple-darwin"* ]]; then
+            echo "Setting paths for X86_64 build..."
+            MPV_LIB_PATH="/usr/local/lib" # Standard Intel Homebrew path
+          else
+            echo "::warning::Could not determine MPV lib path for target $TARGET_ARCH. Using native path."
+            MPV_LIB_PATH="$(brew --prefix mpv)/lib"
+          fi
+          
+          if [ -z "$MPV_LIB_PATH" ] || [ ! -d "$MPV_LIB_PATH" ]; then
+            echo "::error::Failed to determine or find valid MPV library path: $MPV_LIB_PATH for target $TARGET_ARCH"
+            ls -l /opt/homebrew/lib || true # List contents for debugging
+            ls -l /usr/local/lib || true  # List contents for debugging
+            exit 1
+          fi
+          
+          echo "Using MPV library path: $MPV_LIB_PATH"
+          echo "Adding linker search path: $MPV_LIB_PATH"
+          echo "RUSTFLAGS=-L $MPV_LIB_PATH" >> $GITHUB_ENV
+          echo "LIBMPV_LIB_DIR=$MPV_LIB_PATH" >> $GITHUB_ENV
 
       - name: Download libmpv-2.dll (Windows)
         if: matrix.platform == 'windows-latest'
@@ -113,15 +140,13 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # --- Conditionally set MPV paths for macOS --- 
-          MPV_LIB_PATH: ${{ startsWith(matrix.platform, 'macos-') && contains(matrix.args, 'aarch64') && '/opt/homebrew/lib' || (startsWith(matrix.platform, 'macos-') && contains(matrix.args, 'x86_64') && '/usr/local/lib' || '') }}
-          RUSTFLAGS: ${{ startsWith(matrix.platform, 'macos-') && format('-L {0}', env.MPV_LIB_PATH) || '' }}
-          LIBMPV_LIB_DIR: ${{ env.MPV_LIB_PATH }} # Build script uses this
+          # RUSTFLAGS and LIBMPV_LIB_DIR are now set via GITHUB_ENV in the setup step above
           # --- Signing Keys --- 
-          TAURI_PRIVATE_KEY: ./private.key # v2 key path
-          TAURI_SIGNING_PRIVATE_KEY: ./private.key # v1 key path (for compatibility)
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }} # v2 password 
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }} # Also set v1 password var
+          TAURI_PRIVATE_KEY: ./private.key 
+          TAURI_SIGNING_PRIVATE_KEY: ./private.key 
+          # --- Passwords --- 
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }} 
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         with:
           tagName: app-v__VERSION__ # The action automatically replaces __VERSION__ with the app version.
           releaseName: 'App v__VERSION__'
