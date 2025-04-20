@@ -37,7 +37,7 @@ fn main() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let manifest_path = Path::new(&manifest_dir);
     let templates_dir = manifest_path.join("templates");
-    let dist_dir = templates_dir.join("dist"); // Define dist_dir for favicon check
+    // let _dist_dir = templates_dir.join("dist"); // Define dist_dir for favicon check
 
     /* === Removed CSS Build Logic ===
        CSS build is now handled by a separate step in the GitHub Actions workflow.
