@@ -71,35 +71,89 @@ jobs:
       - name: Install/Setup mpv (macOS)
         if: startsWith(matrix.platform, 'macos-')
         run: |
-          echo "Installing mpv via Homebrew..."
-          brew install mpv # Installs native arch (arm64 on current runners)
-          echo "Attempting to install x86_64 mpv via Rosetta..."
-          arch -x86_64 brew install mpv # Installs intel arch (to /usr/local/lib)
-          
-          TARGET_ARCH="${{ matrix.args }}" # Get the target string like --target aarch64-apple-darwin
+          TARGET_ARCH="${{ matrix.args }}" # Get the target string
           MPV_LIB_PATH=""
           
           echo "Build target args: $TARGET_ARCH"
           
           if [[ "$TARGET_ARCH" == *"aarch64-apple-darwin"* ]]; then
+            echo "Installing mpv via Homebrew (native ARM64)..."
+            brew install mpv 
             echo "Setting paths for ARM64 build..."
-            MPV_LIB_PATH="$(arch -arm64 brew --prefix mpv)/lib" # Explicitly get arm path
+            MPV_LIB_PATH="/opt/homebrew/opt/mpv/lib" # Standard ARM Homebrew path
           elif [[ "$TARGET_ARCH" == *"x86_64-apple-darwin"* ]]; then
-            echo "Setting paths for X86_64 build using /usr/local/lib..."
-            MPV_LIB_PATH="/usr/local/lib" # Hardcode standard Intel Homebrew path
+            # Install x86_64 Homebrew into /usr/local first
+            echo "Installing Homebrew for x86_64 into /usr/local (non-interactive)..."
+            if ! arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/null; then
+              echo "::error::Failed to install x86_64 Homebrew into /usr/local."
+              exit 1
+            fi
+            echo "Successfully initiated x86_64 Homebrew installation."
+            
+            # --- DEBUG: Verify x86_64 Homebrew installation --- 
+            echo "Checking existence of /usr/local/bin/brew:"
+            ls -l /usr/local/bin/brew
+            echo "Running config for /usr/local/bin/brew:"
+            arch -x86_64 /usr/local/bin/brew config || echo '::warning::Failed to run brew config for x86_64 brew'
+            # --- END DEBUG --- 
+            
+            echo "Attempting to install x86_64 mpv using /usr/local/bin/brew with explicit PATH..."
+            # Use the x86_64 brew executable explicitly, set PATH, and allow overwriting conflicting files (like python symlinks)
+            arch -x86_64 env PATH="/usr/local/bin:$PATH" /usr/local/bin/brew install mpv --overwrite
+            BREW_EXIT_CODE=$?
+            echo "brew install mpv exited with code: $BREW_EXIT_CODE"
+            
+            if [ $BREW_EXIT_CODE -ne 0 ]; then
+              echo "::error::Failed to install x86_64 mpv (Exit Code: $BREW_EXIT_CODE)."
+              # Add specific logs from brew if possible
+              # cat /Users/runner/Library/Logs/Homebrew/mpv/01.configure.cc # Example log path, might vary
+              exit 1
+            fi
+            echo "Successfully installed x86_64 mpv."
+            
+            echo "Setting paths for X86_64 build..."
+            # Standard path for Homebrew installed in /usr/local
+            MPV_LIB_PATH="/usr/local/opt/mpv/lib"
+            echo "Using x86_64 mpv path: $MPV_LIB_PATH"
+            
+            # --- DEBUG: Check the determined path and library --- 
+            echo "Listing contents of x86_64 lib path: $MPV_LIB_PATH"
+            ls -l "$MPV_LIB_PATH" || echo "::warning::Directory $MPV_LIB_PATH not found or couldn't be listed."
+            echo "Checking architecture of libmpv.dylib in $MPV_LIB_PATH"
+            file "$MPV_LIB_PATH/libmpv.dylib" || echo "::warning::libmpv.dylib not found at $MPV_LIB_PATH/libmpv.dylib"
+            file "$MPV_LIB_PATH/libmpv.2.dylib" || echo "::warning::libmpv.2.dylib not found at $MPV_LIB_PATH/libmpv.2.dylib"
+            # --- END DEBUG --- 
           else
-            echo "Warning: Could not determine MPV lib path for target $TARGET_ARCH"
-            MPV_LIB_PATH="$(brew --prefix mpv)/lib"
+            echo "::error::Unsupported macOS target architecture: $TARGET_ARCH. Cannot determine which mpv to install."
+            exit 1
           fi
           
-          if [ -z "$MPV_LIB_PATH" ]; then
-            echo "::error::Failed to determine MPV library path for target $TARGET_ARCH"
+          echo "Attempting to use MPV library path: $MPV_LIB_PATH"
+          
+          # Check if the determined directory exists
+          if [ -z "$MPV_LIB_PATH" ] || [ ! -d "$MPV_LIB_PATH" ]; then
+            echo "::error::MPV library directory not found: $MPV_LIB_PATH for target $TARGET_ARCH"
+            # Add more specific debug listings based on target
+            if [[ "$TARGET_ARCH" == *"aarch64-apple-darwin"* ]]; then
+              echo "Listing /opt/homebrew/opt/mpv/lib..."
+              ls -l /opt/homebrew/opt/mpv/lib || true
+            elif [[ "$TARGET_ARCH" == *"x86_64-apple-darwin"* ]]; then
+              echo "Listing /usr/local/opt/mpv/lib..."
+              ls -l /usr/local/opt/mpv/lib || true
+            fi
+            exit 1
+          fi
+          
+          # Check if the library file itself exists
+          if [ ! -f "$MPV_LIB_PATH/libmpv.dylib" ] && [ ! -f "$MPV_LIB_PATH/libmpv.2.dylib" ]; then
+            echo "::error::libmpv.dylib or libmpv.2.dylib not found in $MPV_LIB_PATH"
             exit 1
           fi
           
           echo "Using MPV library path: $MPV_LIB_PATH"
           echo "Adding linker search path: $MPV_LIB_PATH"
-          echo "RUSTFLAGS=-L $MPV_LIB_PATH" >> $GITHUB_ENV
+          # Quote the path in RUSTFLAGS in case it contains spaces
+          echo "RUSTFLAGS=-L \"$MPV_LIB_PATH\"" >> $GITHUB_ENV
           echo "LIBMPV_LIB_DIR=$MPV_LIB_PATH" >> $GITHUB_ENV
 
       - name: Download libmpv-2.dll (Windows)
@@ -121,10 +175,13 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # RUSTFLAGS and LIBMPV_LIB_DIR are now set via $GITHUB_ENV in previous steps
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          # RUSTFLAGS and LIBMPV_LIB_DIR are now set via GITHUB_ENV in the setup step above
+          # --- Signing Keys --- 
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }} # Use secret directly
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }} # Use secret directly
+          # --- Passwords --- 
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }} 
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         with:
           tagName: app-v__VERSION__ # The action automatically replaces __VERSION__ with the app version.
           releaseName: 'App v__VERSION__'
