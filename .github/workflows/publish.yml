@@ -71,18 +71,18 @@ jobs:
       - name: Download and Setup Pre-compiled mpv (macOS)
         if: startsWith(matrix.platform, 'macos-')
         env:
-          # Replace with the actual URL to the release assets
           RELEASE_URL: https://github.com/eko5624/mpv-mac/releases/download/2025-04-07 
-          # !!! Verify these asset names on the release page !!!
-          ARM64_ASSET: libmpv.arm64.dylib 
-          X86_64_ASSET: libmpv.x86_64.dylib
+          # Corrected asset names based on release page
+          ARM64_ASSET: libmpv-arm64-b09e06a920.zip 
+          X86_64_ASSET: libmpv-x86_64-b09e06a920.zip
         run: |
           echo "Downloading pre-compiled mpv libraries..."
           mkdir -p src-tauri/libs/macos # Create directory for the library
+          TEMP_ZIP="mpv_dylib.zip" # Temporary filename for download
+          EXTRACT_DIR="mpv_dylib_extracted"
           
           TARGET_ARCH="${{ matrix.args }}" # Get the target string like --target aarch64-apple-darwin
           DOWNLOAD_URL=""
-          TARGET_DYLIB=""
           MPV_LIB_PATH="libs/macos" # Relative path for linker/build script
           CONFIG_CONTENT=""
           
@@ -92,27 +92,59 @@ jobs:
           if [[ "$TARGET_ARCH" == *"aarch64-apple-darwin"* ]]; then
             echo "Setting up for ARM64 build..."
             DOWNLOAD_URL="${RELEASE_URL}/${ARM64_ASSET}"
-            TARGET_DYLIB="src-tauri/libs/macos/libmpv.2.dylib"
             CONFIG_CONTENT="[target.aarch64-apple-darwin]\nrustflags = [\"-L\", \"$MPV_LIB_PATH\"]"
           elif [[ "$TARGET_ARCH" == *"x86_64-apple-darwin"* ]]; then
             echo "Setting up for X86_64 build..."
             DOWNLOAD_URL="${RELEASE_URL}/${X86_64_ASSET}"
-            TARGET_DYLIB="src-tauri/libs/macos/libmpv.2.dylib"
             CONFIG_CONTENT="[target.x86_64-apple-darwin]\nrustflags = [\"-L\", \"$MPV_LIB_PATH\"]"
           else
             echo "::error::Could not determine download URL for target $TARGET_ARCH"
             exit 1
           fi
           
-          # Download the correct dylib
-          echo "Downloading from $DOWNLOAD_URL to $TARGET_DYLIB"
-          curl -L "$DOWNLOAD_URL" -o "$TARGET_DYLIB"
+          # Download the correct zip
+          echo "Downloading from $DOWNLOAD_URL to $TEMP_ZIP"
+          curl -L "$DOWNLOAD_URL" -o "$TEMP_ZIP"
           if [ $? -ne 0 ]; then
             echo "::error::Failed to download $DOWNLOAD_URL"
             exit 1
           fi
-          echo "Downloaded $(basename $DOWNLOAD_URL)"
-          ls -l src-tauri/libs/macos # Verify download
+          
+          # Unzip and find the dylib
+          echo "Unzipping $TEMP_ZIP..."
+          unzip -o "$TEMP_ZIP" -d "$EXTRACT_DIR"
+          if [ $? -ne 0 ]; then
+            echo "::error::Failed to unzip $TEMP_ZIP"
+            exit 1
+          fi
+          
+          # Find the dylib (assuming it's in a 'lib' subdirectory, adjust if needed)
+          # Common names: libmpv.2.dylib, libmpv.dylib
+          FOUND_DYLIB=$(find "$EXTRACT_DIR" -name 'libmpv*.dylib' -print -quit)
+          
+          if [ -z "$FOUND_DYLIB" ]; then
+             echo "::error::Could not find libmpv dylib in extracted archive $EXTRACT_DIR"
+             # List contents for debugging
+             find "$EXTRACT_DIR"
+             exit 1
+          fi
+          
+          echo "Found dylib: $FOUND_DYLIB"
+          
+          # Copy the found dylib to the target location
+          TARGET_DYLIB="src-tauri/libs/macos/libmpv.2.dylib" # Target name required by linker
+          echo "Copying $FOUND_DYLIB to $TARGET_DYLIB"
+          cp "$FOUND_DYLIB" "$TARGET_DYLIB"
+          if [ $? -ne 0 ]; then
+            echo "::error::Failed to copy dylib to $TARGET_DYLIB"
+            exit 1
+          fi
+          ls -l src-tauri/libs/macos # Verify copy
+          
+          # Clean up downloaded zip and extracted dir
+          echo "Cleaning up temporary files..."
+          rm "$TEMP_ZIP"
+          rm -rf "$EXTRACT_DIR"
           
           # Create the config file
           echo "Creating .cargo/config.toml"
