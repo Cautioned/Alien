@@ -195,7 +195,8 @@ jobs:
           [target.x86_64-pc-windows-msvc]
           rustflags = ["-L", "src-tauri"]
           "@
-          echo $configContent | Out-File -FilePath .cargo/config.toml -Encoding utf8 -Append
+          # Use .NET method to append without BOM
+          [System.IO.File]::AppendAllText(".cargo/config.toml", $configContent)
           echo "Contents of .cargo/config.toml:"
           cat .cargo/config.toml
 
