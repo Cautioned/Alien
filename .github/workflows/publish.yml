@@ -178,13 +178,24 @@ jobs:
           echo "MPV .lib file generated (hopefully) in $(pwd)"
           ls *.lib # Verify mpv.lib was created here
           cd .. # Go back to the root directory
-          # Set LIBMPV_LIB_DIR for the tauri-action step
-          echo "Setting LIBMPV_LIB_DIR=src-tauri"
-          echo "LIBMPV_LIB_DIR=src-tauri" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      # === End MPV/Linker Setup ===
+       # === End MPV/Linker Setup ===
 
-      # === Tauri Build and Release (Single Step) ===
-      - uses: tauri-apps/tauri-action@v0
+      # === Configure Linker Path for Windows ===
+      - name: Configure Cargo for Windows lib path
+        if: matrix.platform == 'windows-latest'
+        shell: powershell
+        run: |
+          mkdir -p .cargo # Ensure .cargo directory exists
+          $configContent = "`n[target.x86_64-pc-windows-msvc]`nrustflags = [\"-L\", \"src-tauri\"]`n"
+          echo "Adding Windows target config to .cargo/config.toml:"
+          echo $configContent
+          Add-Content -Path .cargo/config.toml -Value $configContent
+          echo "--- .cargo/config.toml content after update --- "
+          cat .cargo/config.toml
+          echo "-----------------------------------------------"
+
+       # === Tauri Build and Release (Single Step) ===
+       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # RUSTFLAGS and LIBMPV_LIB_DIR are now set via $GITHUB_ENV in previous steps
