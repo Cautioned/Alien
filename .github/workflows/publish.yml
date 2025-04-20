@@ -187,11 +187,10 @@ jobs:
         run: |
           mkdir -p .cargo # Ensure .cargo directory exists
           echo "Adding linker path to .cargo/config.toml for Windows..."
-          $configContent = @"
-
+          $configContent = @'
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-L", "src-tauri"]
-"@
+'@
           echo $configContent | Out-File -FilePath .cargo/config.toml -Encoding utf8 -Append
           echo "Contents of .cargo/config.toml:"
           cat .cargo/config.toml
