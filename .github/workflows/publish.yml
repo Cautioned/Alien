@@ -16,12 +16,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin' # for Arm based macs (M1 and above).
-          - platform: 'macos-latest'
-            args: '--target x86_64-apple-darwin' # for Intel based macs.
-          - platform: 'ubuntu-22.04'
-            args: '' # for Tauri v2.
+          - platform: 'macos-latest' # for Arm based macs (M1 and above).
+            args: '--target aarch64-apple-darwin'
+          - platform: 'macos-latest' # for Intel based macs.
+            args: '--target x86_64-apple-darwin'
+          - platform: 'ubuntu-22.04' # for Tauri v2.
+            args: ''
           - platform: 'windows-latest'
             args: ''
 
@@ -178,24 +178,24 @@ jobs:
           echo "MPV .lib file generated (hopefully) in $(pwd)"
           ls *.lib # Verify mpv.lib was created here
           cd .. # Go back to the root directory
-       # === End MPV/Linker Setup ===
+          # We will set the linker path via config.toml instead of ENV var
 
-      # === Configure Linker Path for Windows ===
-      - name: Configure Cargo for Windows lib path
+      # === Add Linker Path for Windows ===
+      - name: Configure Linker Path (Windows)
         if: matrix.platform == 'windows-latest'
         shell: powershell
         run: |
           mkdir -p .cargo # Ensure .cargo directory exists
-          $configContent = "`n[target.x86_64-pc-windows-msvc]`nrustflags = [\"-L\", \"src-tauri\"]`n"
-          echo "Adding Windows target config to .cargo/config.toml:"
-          echo $configContent
-          Add-Content -Path .cargo/config.toml -Value $configContent
-          echo "--- .cargo/config.toml content after update --- "
+          echo "Adding linker path to .cargo/config.toml for Windows..."
+          $configContent = "`n[target.x86_64-pc-windows-msvc]`nrustflags = [\"-L\", \"src-tauri\"]"
+          echo $configContent | Out-File -FilePath .cargo/config.toml -Encoding utf8 -Append
+          echo "Contents of .cargo/config.toml:"
           cat .cargo/config.toml
-          echo "-----------------------------------------------"
 
-       # === Tauri Build and Release (Single Step) ===
-       - uses: tauri-apps/tauri-action@v0
+      # === End MPV/Linker Setup ===
+
+      # === Tauri Build and Release (Single Step) ===
+      - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # RUSTFLAGS and LIBMPV_LIB_DIR are now set via $GITHUB_ENV in previous steps
