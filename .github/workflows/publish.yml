@@ -132,7 +132,8 @@ jobs:
           echo "Found dylib: $FOUND_DYLIB"
           
           # Copy the found dylib to the target location
-          TARGET_DYLIB="src-tauri/libs/macos/libmpv.2.dylib" # Target name required by linker
+          # Use libmpv.dylib as the target filename for the linker (-lmpv)
+          TARGET_DYLIB="src-tauri/libs/macos/libmpv.dylib"
           echo "Copying $FOUND_DYLIB to $TARGET_DYLIB"
           cp "$FOUND_DYLIB" "$TARGET_DYLIB"
           if [ $? -ne 0 ]; then
