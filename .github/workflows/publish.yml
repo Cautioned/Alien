@@ -71,11 +71,12 @@ jobs:
       - name: Install/Setup mpv (macOS)
         if: startsWith(matrix.platform, 'macos-')
         run: |
-          echo "Installing mpv via IINA Homebrew tap..."
+          echo "Installing ARM mpv-iina via Homebrew tap..."
           brew tap iina/homebrew-mpv-iina
-          brew install --HEAD mpv-iina # Installs native arch (arm64)
-          echo "Attempting to install x86_64 mpv-iina via Rosetta..."
-          arch -x86_64 brew install --HEAD mpv-iina # Installs intel arch (to /usr/local/lib)
+          brew install --HEAD mpv-iina # Installs native arch (arm64) - keg-only
+          
+          echo "Attempting to install standard x86_64 mpv via Rosetta..."
+          arch -x86_64 brew install mpv # Installs standard intel mpv (to /usr/local/lib)
           
           TARGET_ARCH="${{ matrix.args }}" # Get the target string like --target aarch64-apple-darwin
           MPV_LIB_PATH=""
@@ -86,22 +87,29 @@ jobs:
           
           if [[ "$TARGET_ARCH" == *"aarch64-apple-darwin"* ]]; then
             echo "Setting paths for ARM64 build..."
-            MPV_LIB_PATH="$(arch -arm64 brew --prefix mpv-iina)/lib" # Use mpv-iina prefix
+            # Use the keg-only path for ARM mpv-iina
+            MPV_LIB_PATH="/opt/homebrew/opt/mpv-iina/lib" 
             CONFIG_CONTENT="[target.aarch64-apple-darwin]\nrustflags = [\"-L\", \"$MPV_LIB_PATH\"]"
           elif [[ "$TARGET_ARCH" == *"x86_64-apple-darwin"* ]]; then
             echo "Setting paths for X86_64 build using /usr/local/lib..."
-            MPV_LIB_PATH="/usr/local/lib" # Standard Intel Homebrew path
-            # We assume `arch -x86_64 brew install mpv-iina` installs here correctly
+            # Use the standard Intel Homebrew path for standard mpv
+            MPV_LIB_PATH="/usr/local/lib" 
             CONFIG_CONTENT="[target.x86_64-apple-darwin]\nrustflags = [\"-L\", \"$MPV_LIB_PATH\"]"
           else
-            echo "Warning: Could not determine MPV lib path for target $TARGET_ARCH"
-            MPV_LIB_PATH="$(brew --prefix mpv-iina)/lib" # Use mpv-iina prefix
+            echo "Warning: Could not determine MPV lib path for target $TARGET_ARCH. Defaulting to ARM keg path."
+            MPV_LIB_PATH="/opt/homebrew/opt/mpv-iina/lib"
           fi
           
           if [ -z "$MPV_LIB_PATH" ]; then
             echo "::error::Failed to determine MPV library path for target $TARGET_ARCH"
             exit 1
           fi
+
+          # Add some debug checks for library existence
+          echo "Checking ARM path: /opt/homebrew/opt/mpv-iina/lib"
+          ls -l /opt/homebrew/opt/mpv-iina/lib || echo "ARM Path listing failed (might be ok if not ARM build)"
+          echo "Checking Intel path: /usr/local/lib"
+          ls -l /usr/local/lib || echo "Intel Path listing failed (might be ok if not Intel build)"
           
           # Create the config file if content was set
           if [ -n "$CONFIG_CONTENT" ]; then
@@ -135,8 +143,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # RUSTFLAGS and LIBMPV_LIB_DIR are now set via $GITHUB_ENV in previous steps
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         with:
           tagName: app-v__VERSION__ # The action automatically replaces __VERSION__ with the app version.
