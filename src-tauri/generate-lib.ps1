@@ -6,11 +6,11 @@ $OUTPUT_PATH = "$SCRIPT_DIR"
 Write-Host "Working with directory: $SCRIPT_DIR"
 Write-Host "Looking for DLL at: $DLL_PATH"
 
-# Create def file from our DLL
-& "C:/msys64/mingw64/bin/gendef.exe" "$DLL_PATH"
+# Create def file from our DLL (Rely on PATH)
+& gendef.exe "$DLL_PATH"
 
-# Generate lib file from def with explicit output path
-& "C:/msys64/mingw64/bin/dlltool.exe" -d libmpv-2.def -l "$OUTPUT_PATH/libmpv-2.lib" -D libmpv-2.dll
+# Generate lib file from def with explicit output path (Rely on PATH)
+& dlltool.exe -d libmpv-2.def -l "$OUTPUT_PATH/libmpv-2.lib" -D libmpv-2.dll
 
 # Verify file was created
 if (Test-Path "$OUTPUT_PATH/libmpv-2.lib") {
