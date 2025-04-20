@@ -68,55 +68,58 @@ jobs:
         shell: pwsh # Use powershell for this step
 
       # === MPV/Linker Setup ===
-      - name: Install/Setup mpv (macOS)
+      - name: Download and Setup Pre-compiled mpv (macOS)
         if: startsWith(matrix.platform, 'macos-')
+        env:
+          # Replace with the actual URL to the release assets
+          RELEASE_URL: https://github.com/eko5624/mpv-mac/releases/download/2025-04-07 
+          # !!! Verify these asset names on the release page !!!
+          ARM64_ASSET: libmpv.arm64.dylib 
+          X86_64_ASSET: libmpv.x86_64.dylib
         run: |
-          echo "Installing ARM mpv-iina via Homebrew tap..."
-          brew tap iina/homebrew-mpv-iina
-          brew install --HEAD mpv-iina # Installs native arch (arm64) - keg-only
-          
-          echo "Attempting to install standard x86_64 mpv via Rosetta..."
-          arch -x86_64 brew install mpv # Installs standard intel mpv (to /usr/local/lib)
+          echo "Downloading pre-compiled mpv libraries..."
+          mkdir -p src-tauri/libs/macos # Create directory for the library
           
           TARGET_ARCH="${{ matrix.args }}" # Get the target string like --target aarch64-apple-darwin
-          MPV_LIB_PATH=""
+          DOWNLOAD_URL=""
+          TARGET_DYLIB=""
+          MPV_LIB_PATH="libs/macos" # Relative path for linker/build script
           CONFIG_CONTENT=""
           
           echo "Build target args: $TARGET_ARCH"
           mkdir -p .cargo # Ensure .cargo directory exists
           
           if [[ "$TARGET_ARCH" == *"aarch64-apple-darwin"* ]]; then
-            echo "Setting paths for ARM64 build..."
-            MPV_LIB_PATH="/opt/homebrew/opt/mpv-iina/lib" 
+            echo "Setting up for ARM64 build..."
+            DOWNLOAD_URL="${RELEASE_URL}/${ARM64_ASSET}"
+            TARGET_DYLIB="src-tauri/libs/macos/libmpv.2.dylib"
             CONFIG_CONTENT="[target.aarch64-apple-darwin]\nrustflags = [\"-L\", \"$MPV_LIB_PATH\"]"
           elif [[ "$TARGET_ARCH" == *"x86_64-apple-darwin"* ]]; then
-            echo "Setting dynamic_lookup for X86_64 build..."
-            MPV_LIB_PATH="/usr/local/lib" # Expected runtime path for LIBMPV_LIB_DIR
-            CONFIG_CONTENT="[target.x86_64-apple-darwin]\nrustflags = [\"-C\", \"link-arg=-undefined\", \"-C\", \"link-arg=dynamic_lookup\"]"
+            echo "Setting up for X86_64 build..."
+            DOWNLOAD_URL="${RELEASE_URL}/${X86_64_ASSET}"
+            TARGET_DYLIB="src-tauri/libs/macos/libmpv.2.dylib"
+            CONFIG_CONTENT="[target.x86_64-apple-darwin]\nrustflags = [\"-L\", \"$MPV_LIB_PATH\"]"
           else
-            echo "Warning: Could not determine MPV lib path for target $TARGET_ARCH. Defaulting to ARM keg path."
-            MPV_LIB_PATH="/opt/homebrew/opt/mpv-iina/lib"
-          fi
-          
-          if [ -z "$MPV_LIB_PATH" ]; then
-            echo "::error::Failed to determine MPV library path for target $TARGET_ARCH"
+            echo "::error::Could not determine download URL for target $TARGET_ARCH"
             exit 1
           fi
-
-          # Add some debug checks for library existence
-          echo "Checking ARM path: /opt/homebrew/opt/mpv-iina/lib"
-          ls -l /opt/homebrew/opt/mpv-iina/lib || echo "ARM Path listing failed (might be ok if not ARM build)"
-          echo "Checking Intel path: /usr/local/opt/mpv-iina/lib"
-          ls -l /usr/local/opt/mpv-iina/lib || echo "Intel Path listing failed (might be ok if not Intel build)"
           
-          # Create the config file if content was set
-          if [ -n "$CONFIG_CONTENT" ]; then
-            echo "Creating .cargo/config.toml"
-            echo -e "$CONFIG_CONTENT" > .cargo/config.toml
-            cat .cargo/config.toml # Print content for verification
+          # Download the correct dylib
+          echo "Downloading from $DOWNLOAD_URL to $TARGET_DYLIB"
+          curl -L "$DOWNLOAD_URL" -o "$TARGET_DYLIB"
+          if [ $? -ne 0 ]; then
+            echo "::error::Failed to download $DOWNLOAD_URL"
+            exit 1
           fi
+          echo "Downloaded $(basename $DOWNLOAD_URL)"
+          ls -l src-tauri/libs/macos # Verify download
           
-          # Still set LIBMPV_LIB_DIR for the build script (libmpv2-sys)
+          # Create the config file
+          echo "Creating .cargo/config.toml"
+          echo -e "$CONFIG_CONTENT" > .cargo/config.toml
+          cat .cargo/config.toml # Print content for verification
+          
+          # Set LIBMPV_LIB_DIR for the build script (relative path)
           echo "Setting LIBMPV_LIB_DIR=$MPV_LIB_PATH"
           echo "LIBMPV_LIB_DIR=$MPV_LIB_PATH" >> $GITHUB_ENV
 
