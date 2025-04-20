@@ -177,6 +177,10 @@ jobs:
           }
           echo "MPV .lib file generated (hopefully) in $(pwd)"
           ls *.lib # Verify mpv.lib was created here
+          # Rename the generated file to what the linker expects
+          echo "Renaming libmpv-2.lib to mpv.lib..."
+          Rename-Item -Path .\libmpv-2.lib -NewName mpv.lib
+          ls *.lib # Verify the rename
           cd .. # Go back to the root directory
           # We will set the linker path via config.toml instead of ENV var
 
