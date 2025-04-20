@@ -85,12 +85,10 @@ jobs:
             echo "Setting paths for ARM64 build..."
             MPV_LIB_PATH="$(arch -arm64 brew --prefix mpv)/lib" # Explicitly get arm path
           elif [[ "$TARGET_ARCH" == *"x86_64-apple-darwin"* ]]; then
-            echo "Setting paths for X86_64 build..."
-            MPV_LIB_PATH="$(arch -x86_64 brew --prefix mpv)/lib" # Explicitly get x86_64 path
-            # Alternative if prefix doesn't work reliably for x86_64 under Rosetta: MPV_LIB_PATH="/usr/local/lib"
+            echo "Setting paths for X86_64 build using /usr/local/lib..."
+            MPV_LIB_PATH="/usr/local/lib" # Hardcode standard Intel Homebrew path
           else
             echo "Warning: Could not determine MPV lib path for target $TARGET_ARCH"
-            # Default to native arch path if needed
             MPV_LIB_PATH="$(brew --prefix mpv)/lib"
           fi
           
@@ -101,9 +99,7 @@ jobs:
           
           echo "Using MPV library path: $MPV_LIB_PATH"
           echo "Adding linker search path: $MPV_LIB_PATH"
-          # Set RUSTFLAGS to include the -L flag for the linker
           echo "RUSTFLAGS=-L $MPV_LIB_PATH" >> $GITHUB_ENV
-          # Also set LIBMPV_LIB_DIR for the build script (libmpv2-sys)
           echo "LIBMPV_LIB_DIR=$MPV_LIB_PATH" >> $GITHUB_ENV
 
       - name: Download libmpv-2.dll (Windows)
@@ -121,14 +117,23 @@ jobs:
           echo "MPV .lib file generated (hopefully)"
       # === End MPV/Linker Setup ===
 
+      # === Write Private Key Secret to File ===
+      - name: Write private key to file
+        # Use shell based on runner platform
+        shell: bash
+        run: echo "${{ secrets.TAURI_PRIVATE_KEY }}" > ./private.key
+        env:
+           # Need to pass the secret to the step's env explicitly if using it directly in run
+           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }} 
+
       # === Tauri Build and Release (Single Step) ===
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # RUSTFLAGS and LIBMPV_LIB_DIR are now set via $GITHUB_ENV in previous steps
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          # --- Set key variables to use the temporary file path --- 
+          TAURI_PRIVATE_KEY: ./private.key # Pass the path to the key file
+          TAURI_SIGNING_PRIVATE_KEY: ./private.key # Pass the path for v1 compatibility too
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }} # Keep password as secret reference
         with:
           tagName: app-v__VERSION__ # The action automatically replaces __VERSION__ with the app version.
           releaseName: 'App v__VERSION__'
