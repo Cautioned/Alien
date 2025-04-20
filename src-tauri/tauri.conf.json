@@ -38,7 +38,6 @@
     "shortDescription": "A video synchronization tool for animation reference",
     "longDescription": "Alien is a video synchronization tool for animation reference. It's to be used with the Alien Roblox Studio plugin, which will allow you to sync animations with moon animator or any other plugins that use the api.",
     "resources": [
-      "libmpv-2.dll",
       "scripts/*",
       "templates/*"
     ],
