@@ -11,7 +11,7 @@ lerna-debug.log*
 node_modules
 /.pnp
 .pnp.js
-*lock.json
+# *lock.json
 
 # Build outputs
 /dist
