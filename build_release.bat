@@ -9,13 +9,18 @@ echo.
 echo Please provide the signing key details:
 echo.
 
-set /p TAURI_PRIVATE_KEY="Enter FULL path to your TAURI_PRIVATE_KEY file: "
+set /p KEY_PATH_INPUT="Enter FULL path to your private key file (no quotes): "
 
 :: Check if the path was entered
-if not defined TAURI_PRIVATE_KEY (
+if not defined KEY_PATH_INPUT (
     echo ERROR: Private key path cannot be empty.
     exit /b 1
 )
+
+:: Set both v2 and v1 style environment variables from the input
+set TAURI_PRIVATE_KEY=%KEY_PATH_INPUT%
+set TAURI_SIGNING_PRIVATE_KEY=%KEY_PATH_INPUT%
+
 
 :: Check if the file exists (basic check)
 if not exist "%TAURI_PRIVATE_KEY%" (
@@ -40,16 +45,13 @@ if not exist "%MPV_SOURCE%\libmpv-2.dll" (
 echo Copying MPV DLL to release directory...
 copy /Y "%MPV_SOURCE%\libmpv-2.dll" "src-tauri\target\release\libmpv-2.dll"
 
-:: Check and generate the lib file from the DLL
-if not exist "%MPV_SOURCE%\libmpv-2.lib" (
-    echo Generating MPV lib file...
-    powershell -ExecutionPolicy Bypass -File "%MPV_SOURCE%\generate-lib.ps1"
-
-)
+:: Generate the lib file from the DLL
+echo Generating MPV lib file...
+powershell -ExecutionPolicy Bypass -File "%MPV_SOURCE%\generate-lib.ps1"
 
 :: Run the build (Uses the environment variables set via prompt)
-echo Building application...
-npm run build --release
+echo Building application for release...
+npm run tauri build --release
 
 if errorlevel 1 (
     echo Build failed

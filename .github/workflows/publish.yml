@@ -80,6 +80,7 @@ jobs:
           releaseBody: 'See the assets to download this version and install.'
           releaseDraft: true
           prerelease: false
+          includeUpdaterJson: true
           args: ${{ matrix.args }} 
 
       # === MPV Build-time Setup ===
@@ -110,5 +111,6 @@ jobs:
           releaseBody: 'See the assets to download this version and install.'
           releaseDraft: true # Creates a draft release. Change to false to publish automatically.
           prerelease: false # Set to true if releasing pre-releases.
+          includeUpdaterJson: true
           args: ${{ matrix.args }}
           # Note: Assumes `libmpv-2.dll` in `src-tauri/resources` (tauri.conf.json) is sufficient for bundling on Windows. 
