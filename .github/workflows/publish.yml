@@ -48,8 +48,7 @@ jobs:
         # webkitgtk 4.1 is for Tauri v2.
 
       - name: install frontend dependencies
-        # Use npm install for the root project dependencies
-        run: npm install 
+        run: npm ci # Use npm ci for cleaner installs in CI
 
       # === Add MPV setup steps ===
       - name: Install mpv (macOS)
