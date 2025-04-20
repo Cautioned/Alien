@@ -14,7 +14,7 @@ A video synchronization tool for animation reference on Roblox Studio. This tool
 1.  Go to the [latest release page](https://github.com/Cautioned/Alien/releases/latest).
 2.  Scroll down to the **Assets** section.
 3.  Download the correct file for your operating system and architecture:
-    *   **Windows:** Look for the `.msi` file (e.g., `Alien_x.y.z_x64_en-US.msi`).
+    *   **Windows:** Look for the .exe file (e.g., `Alien_x.y.z_x64.exe`) or alternatively, download the .msi file (e.g., `Alien_x.y.z_x64.msi`).
     *   **macOS (Apple Silicon/ARM):** Look for the `_aarch64.dmg` file (e.g., `Alien_x.y.z_aarch64.dmg`).
     *   **macOS (Intel):** Look for the `_x64.dmg` file (e.g., `Alien_x.y.z_x64.dmg`).
     *   _(macOS Alternative): If a `.dmg` is not available for your architecture, look for the corresponding `.app.tar.gz` file and extract it._
