@@ -71,8 +71,35 @@ jobs:
       - name: Install/Setup mpv (macOS)
         if: startsWith(matrix.platform, 'macos-')
         run: |
-          brew install mpv
-          MPV_LIB_PATH=$(brew --prefix mpv)/lib
+          echo "Installing mpv via Homebrew..."
+          brew install mpv # Installs native arch (arm64 on current runners)
+          echo "Attempting to install x86_64 mpv via Rosetta..."
+          arch -x86_64 brew install mpv # Installs intel arch (to /usr/local/lib)
+          
+          TARGET_ARCH="${{ matrix.args }}" # Get the target string like --target aarch64-apple-darwin
+          MPV_LIB_PATH=""
+          
+          echo "Build target args: $TARGET_ARCH"
+          
+          if [[ "$TARGET_ARCH" == *"aarch64-apple-darwin"* ]]; then
+            echo "Setting paths for ARM64 build..."
+            MPV_LIB_PATH="$(arch -arm64 brew --prefix mpv)/lib" # Explicitly get arm path
+          elif [[ "$TARGET_ARCH" == *"x86_64-apple-darwin"* ]]; then
+            echo "Setting paths for X86_64 build..."
+            MPV_LIB_PATH="$(arch -x86_64 brew --prefix mpv)/lib" # Explicitly get x86_64 path
+            # Alternative if prefix doesn't work reliably for x86_64 under Rosetta: MPV_LIB_PATH="/usr/local/lib"
+          else
+            echo "Warning: Could not determine MPV lib path for target $TARGET_ARCH"
+            # Default to native arch path if needed
+            MPV_LIB_PATH="$(brew --prefix mpv)/lib"
+          fi
+          
+          if [ -z "$MPV_LIB_PATH" ]; then
+            echo "::error::Failed to determine MPV library path for target $TARGET_ARCH"
+            exit 1
+          fi
+          
+          echo "Using MPV library path: $MPV_LIB_PATH"
           echo "Adding linker search path: $MPV_LIB_PATH"
           # Set RUSTFLAGS to include the -L flag for the linker
           echo "RUSTFLAGS=-L $MPV_LIB_PATH" >> $GITHUB_ENV
