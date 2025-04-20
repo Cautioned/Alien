@@ -55,7 +55,7 @@ jobs:
       # === Build Frontend CSS ===
       - name: Build Tailwind CSS
         # Runs the build:css script from the root package.json
-        run: npm run build:css 
+        run: npm run build:css # Ensure no --prefix here
 
       # === Add MPV setup steps ===
       - name: Install mpv (macOS)
