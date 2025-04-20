@@ -54,8 +54,18 @@ jobs:
 
       # === Build Frontend CSS ===
       - name: Build Tailwind CSS
-        # Runs the build:css script from the root package.json
-        run: npm run build:css # Ensure no --prefix here
+        run: npm run build:css # Runs the build:css script from the root package.json
+
+      # === Install MSYS2 for gendef/dlltool (Windows Only) ===
+      - name: Install MSYS2
+        if: matrix.platform == 'windows-latest'
+        run: choco install msys2 --params "/InstallDir:C:\msys64" -y
+
+      # === Add MSYS2 tools to PATH (Windows Only) ===
+      - name: Add MSYS2 tools to PATH
+        if: matrix.platform == 'windows-latest'
+        run: echo "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh # Use powershell for this step
 
       # === Add MPV setup steps ===
       - name: Install mpv (macOS)
@@ -76,6 +86,7 @@ jobs:
 
       - name: Generate MPV .lib file (Windows)
         if: matrix.platform == 'windows-latest'
+        # Run AFTER installing MSYS2 and adding to PATH
         shell: powershell # Ensure powershell is used
         run: |
           .\src-tauri\generate-lib.ps1
