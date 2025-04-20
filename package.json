@@ -6,7 +6,9 @@
     "tauri": "tauri",
     "dev": "npm run tauri dev",
     "build": "npm run tauri build",
-    "release": "npm run tauri build"
+    "release": "npm run tauri build --release",
+     "build:css": "tailwindcss -i ./src-tauri/templates/src/input.css -o ./src-tauri/templates/dist/styles.css --minify"
+    
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

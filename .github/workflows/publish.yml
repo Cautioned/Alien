@@ -54,8 +54,8 @@ jobs:
 
       # === Build Frontend CSS ===
       - name: Build Tailwind CSS
-        # Assuming package.json with build:css script is in src-tauri/templates/
-        run: npm run build:css --prefix src-tauri/templates 
+        # Runs the build:css script from the root package.json
+        run: npm run build:css 
 
       # === Add MPV setup steps ===
       - name: Install mpv (macOS)
