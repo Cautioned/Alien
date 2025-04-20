@@ -11,11 +11,16 @@ A video synchronization tool for animation reference on Roblox Studio. This tool
 
 ## Installation
 
-### Windows
-
-1. Download the latest release from the [releases page](https://github.com/cautioned/alien/releases/latest)
-2. Run the installer
-3. The app will automatically install required dependencies
+1.  Go to the [latest release page](https://github.com/Cautioned/Alien/releases/latest).
+2.  Scroll down to the **Assets** section.
+3.  Download the correct file for your operating system and architecture:
+    *   **Windows:** Look for the `.msi` file (e.g., `Alien_x.y.z_x64_en-US.msi`).
+    *   **macOS (Apple Silicon/ARM):** Look for the `_aarch64.dmg` file (e.g., `Alien_x.y.z_aarch64.dmg`).
+    *   **macOS (Intel):** Look for the `_x64.dmg` file (e.g., `Alien_x.y.z_x64.dmg`).
+    *   _(macOS Alternative): If a `.dmg` is not available for your architecture, look for the corresponding `.app.tar.gz` file and extract it._
+    *   **Linux:** Look for the `.AppImage` or `.deb` file.
+4.  Run the downloaded installer (`.msi`, `.dmg`) or the extracted application/AppImage.
+5.  The required `mpv` library is bundled on Windows and macOS. **Linux users need to install `libmpv` separately** using their distribution's package manager (e.g., `sudo apt install libmpv1` on Debian/Ubuntu, `sudo pacman -S mpv` on Arch).
 
 ## Usage
 
