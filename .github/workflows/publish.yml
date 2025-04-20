@@ -98,8 +98,8 @@ jobs:
             # --- END DEBUG --- 
             
             echo "Attempting to install x86_64 mpv using /usr/local/bin/brew with explicit PATH..."
-            # Use the x86_64 brew executable explicitly and set PATH
-            arch -x86_64 env PATH="/usr/local/bin:$PATH" /usr/local/bin/brew install mpv
+            # Use the x86_64 brew executable explicitly, set PATH, and allow overwriting conflicting files (like python symlinks)
+            arch -x86_64 env PATH="/usr/local/bin:$PATH" /usr/local/bin/brew install mpv --overwrite
             BREW_EXIT_CODE=$?
             echo "brew install mpv exited with code: $BREW_EXIT_CODE"
             
