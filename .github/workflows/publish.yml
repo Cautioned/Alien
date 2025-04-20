@@ -47,8 +47,15 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libmpv-dev
         # webkitgtk 4.1 is for Tauri v2.
 
+      # === End Platform Dependencies ===
+
       - name: install frontend dependencies
         run: npm ci # Use npm ci for cleaner installs in CI
+
+      # === Build Frontend CSS ===
+      - name: Build Tailwind CSS
+        # Assuming package.json with build:css script is in src-tauri/templates/
+        run: npm run build:css --prefix src-tauri/templates 
 
       # === Add MPV setup steps ===
       - name: Install mpv (macOS)
@@ -62,27 +69,7 @@ jobs:
           echo "libmpv-2.dll downloaded to src-tauri/"
       # === End MPV setup steps ===
 
-      - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Add linker paths for macOS similar to build.sh
-          LIBRARY_PATH: ${{ startsWith(matrix.platform, 'macos-') && '/opt/homebrew/lib' || '' }}
-          DYLD_LIBRARY_PATH: ${{ startsWith(matrix.platform, 'macos-') && '/opt/homebrew/lib' || '' }}
-          # === IMPORTANT: Add these secrets to your GitHub repository ===
-          # Settings -> Secrets and variables -> Actions -> New repository secret
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-          # LIBMPV_LIB_DIR is automatically picked up from the environment for macOS
-        with:
-          tagName: app-v__VERSION__ # the action automatically replaces __VERSION__ with the app version.
-          releaseName: 'App v__VERSION__'
-          releaseBody: 'See the assets to download this version and install.'
-          releaseDraft: true
-          prerelease: false
-          includeUpdaterJson: true
-          args: ${{ matrix.args }} 
-
-      # === MPV Build-time Setup ===
+      # === MPV Build-time Setup (Moved BEFORE Tauri Build) ===
       - name: Set MPV lib path (macOS)
         if: startsWith(matrix.platform, 'macos-')
         run: echo "LIBMPV_LIB_DIR=$(brew --prefix mpv)/lib" >> $GITHUB_ENV # Set env var for Rust build script (libmpv2-sys)
@@ -95,7 +82,7 @@ jobs:
           echo "MPV .lib file generated (hopefully)"
       # === End MPV Build-time Setup ===
 
-      # === Tauri Build and Release ===
+      # === Tauri Build and Release (Single Step) ===
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -104,6 +91,7 @@ jobs:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           # LIBMPV_LIB_DIR is automatically picked up from the environment for macOS
+          # Note: Old LIBRARY_PATH/DYLD_LIBRARY_PATH might not be needed if LIBMPV_LIB_DIR works correctly
         with:
           tagName: app-v__VERSION__ # The action automatically replaces __VERSION__ with the app version.
           releaseName: 'App v__VERSION__'

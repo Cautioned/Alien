@@ -37,87 +37,92 @@ fn main() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let manifest_path = Path::new(&manifest_dir);
     let templates_dir = manifest_path.join("templates");
+    let dist_dir = templates_dir.join("dist"); // Define dist_dir for favicon check
+
+    /* === Removed CSS Build Logic ===
+       CSS build is now handled by a separate step in the GitHub Actions workflow.
 
     // Ensure the dist directory exists
-    let dist_dir = templates_dir.join("dist");
-    if let Err(e) = fs::create_dir_all(&dist_dir) {
-        panic!("Failed to create dist directory: {}", e);
-    }
-
+    // let dist_dir = templates_dir.join("dist");
+    // if let Err(e) = fs::create_dir_all(&dist_dir) {
+    //     panic!("Failed to create dist directory: {}", e);
+    // }
+    // 
     // Build the CSS
-    println!("cargo:warning=Building CSS...");
-
+    // println!("cargo:warning=Building CSS...");
+    // 
     // Determine npm command based on platform
-    let npm_cmd = if cfg!(target_os = "windows") {
-        "npm.cmd" // Use npm.cmd on Windows
-    } else {
-        "npm" // Assume npm is in PATH for non-windows
-    };
-
+    // let npm_cmd = if cfg!(target_os = "windows") {
+    //     "npm.cmd" // Use npm.cmd on Windows
+    // } else {
+    //     "npm" // Assume npm is in PATH for non-windows
+    // };
+    // 
     // Try specific common Mac paths if default fails
-    let mut npm_locations = vec![npm_cmd.to_string()]; // Start with default/windows
-    if cfg!(target_os = "macos") {
-        npm_locations.extend(vec![
-            "/usr/local/bin/npm".to_string(),
-            "/opt/homebrew/bin/npm".to_string(),
-        ]);
-    }
-
-    let mut success = false;
-    let mut last_error = String::new();
-
-    for npm_path in npm_locations {
-        println!("cargo:warning=Trying npm at: {}", npm_path);
-
-        // Run npm run build:css directly (no install)
-        match std::process::Command::new(&npm_path)
-            .current_dir(&templates_dir)
-            .arg("run")
-            .arg("build:css")
-            .output()
-        {
-            Ok(css_output) => {
-                if css_output.status.success() {
-                    println!(
-                        "cargo:warning=CSS build output: {}",
-                        String::from_utf8_lossy(&css_output.stdout)
-                    );
-                    success = true;
-                    break; // Success, exit loop
-                } else {
-                    last_error = format!(
-                        "CSS build failed using '{}': {}\nStdout: {}\nStderr: {}",
-                        npm_path,
-                        css_output.status,
-                        String::from_utf8_lossy(&css_output.stdout),
-                        String::from_utf8_lossy(&css_output.stderr)
-                    );
-                }
-            }
-            Err(e) => {
-                last_error = format!("Failed to run command '{}': {}", npm_path, e);
-                // If the command itself failed to run (e.g., not found), continue to next path
-            }
-        }
-    }
-
-    if !success {
-        panic!(
-            "Failed to build CSS after trying all npm locations. Last error: {}",
-            last_error
-        );
-    }
-
+    // let mut npm_locations = vec![npm_cmd.to_string()]; // Start with default/windows
+    // if cfg!(target_os = "macos") {
+    //     npm_locations.extend(vec![
+    //         "/usr/local/bin/npm".to_string(),
+    //         "/opt/homebrew/bin/npm".to_string(),
+    //     ]);
+    // }
+    // 
+    // let mut success = false;
+    // let mut last_error = String::new();
+    // 
+    // for npm_path in npm_locations {
+    //     println!("cargo:warning=Trying npm at: {}", npm_path);
+    // 
+    //     // Run npm run build:css directly (no install)
+    //     match std::process::Command::new(&npm_path)
+    //         .current_dir(&templates_dir)
+    //         .arg("run")
+    //         .arg("build:css")
+    //         .output()
+    //     {
+    //         Ok(css_output) => {
+    //             if css_output.status.success() {
+    //                 println!(
+    //                     "cargo:warning=CSS build output: {}",
+    //                     String::from_utf8_lossy(&css_output.stdout)
+    //                 );
+    //                 success = true;
+    //                 break; // Success, exit loop
+    //             } else {
+    //                 last_error = format!(
+    //                     "CSS build failed using '{}': {}\nStdout: {}\nStderr: {}",
+    //                     npm_path,
+    //                     css_output.status,
+    //                     String::from_utf8_lossy(&css_output.stdout),
+    //                     String::from_utf8_lossy(&css_output.stderr)
+    //                 );
+    //             }
+    //         }
+    //         Err(e) => {
+    //             last_error = format!("Failed to run command '{}': {}", npm_path, e);
+    //             // If the command itself failed to run (e.g., not found), continue to next path
+    //         }
+    //     }
+    // }
+    // 
+    // if !success {
+    //     panic!(
+    //         "Failed to build CSS after trying all npm locations. Last error: {}",
+    //         last_error
+    //     );
+    // }
+    // 
     // Verify the CSS file was created
-    let css_file = dist_dir.join("styles.css");
-    if !css_file.exists() {
-        panic!("CSS file was not created at {:?}", css_file);
-    } else {
-        println!("cargo:warning=CSS built successfully at {:?}", css_file);
-        if let Ok(metadata) = fs::metadata(&css_file) {
-            println!("cargo:warning=CSS file size: {} bytes", metadata.len());
-        }
-    }
+    // let css_file = dist_dir.join("styles.css");
+    // if !css_file.exists() {
+    //     panic!("CSS file was not created at {:?}", css_file);
+    // } else {
+    //     println!("cargo:warning=CSS built successfully at {:?}", css_file);
+    //     if let Ok(metadata) = fs::metadata(&css_file) {
+    //         println!("cargo:warning=CSS file size: {} bytes", metadata.len());
+    //     }
+    // }
+    === End Removed CSS Build Logic === */
 
     // Copy favicon.ico from icons to templates
     let favicon_src = manifest_path.join("icons").join("icon.ico");
