@@ -11,7 +11,8 @@
     
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2"
+    "@tauri-apps/cli": "^2",
+    "tailwindcss": "^3.0.0"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0-beta",
