@@ -31,6 +31,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "createUpdaterArtifacts": true,
     "copyright": "Copyright © 2025 Cautioned",
     "category": "Productivity",
     "licenseFile": "LICENSE.txt",

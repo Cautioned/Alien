@@ -44,7 +44,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04' # This must match the platform value defined above.
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libmpv-dev
         # webkitgtk 4.1 is for Tauri v2.
 
       - name: install frontend dependencies
@@ -69,6 +69,11 @@ jobs:
           # Add linker paths for macOS similar to build.sh
           LIBRARY_PATH: ${{ startsWith(matrix.platform, 'macos-') && '/opt/homebrew/lib' || '' }}
           DYLD_LIBRARY_PATH: ${{ startsWith(matrix.platform, 'macos-') && '/opt/homebrew/lib' || '' }}
+          # === IMPORTANT: Add these secrets to your GitHub repository ===
+          # Settings -> Secrets and variables -> Actions -> New repository secret
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          # LIBMPV_LIB_DIR is automatically picked up from the environment for macOS
         with:
           tagName: app-v__VERSION__ # the action automatically replaces __VERSION__ with the app version.
           releaseName: 'App v__VERSION__'
@@ -76,3 +81,34 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }} 
+
+      # === MPV Build-time Setup ===
+      - name: Set MPV lib path (macOS)
+        if: startsWith(matrix.platform, 'macos-')
+        run: echo "LIBMPV_LIB_DIR=$(brew --prefix mpv)/lib" >> $GITHUB_ENV # Set env var for Rust build script (libmpv2-sys)
+
+      - name: Generate MPV .lib file (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: powershell # Ensure powershell is used
+        run: |
+          .\src-tauri\generate-lib.ps1
+          echo "MPV .lib file generated (hopefully)"
+      # === End MPV Build-time Setup ===
+
+      # === Tauri Build and Release ===
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # === IMPORTANT: Add these secrets to your GitHub repository ===
+          # Settings -> Secrets and variables -> Actions -> New repository secret
+          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          # LIBMPV_LIB_DIR is automatically picked up from the environment for macOS
+        with:
+          tagName: app-v__VERSION__ # The action automatically replaces __VERSION__ with the app version.
+          releaseName: 'App v__VERSION__'
+          releaseBody: 'See the assets to download this version and install.'
+          releaseDraft: true # Creates a draft release. Change to false to publish automatically.
+          prerelease: false # Set to true if releasing pre-releases.
+          args: ${{ matrix.args }}
+          # Note: Assumes `libmpv-2.dll` in `src-tauri/resources` (tauri.conf.json) is sufficient for bundling on Windows. 
