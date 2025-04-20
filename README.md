@@ -22,6 +22,8 @@ A video synchronization tool for animation reference on Roblox Studio. This tool
 4.  Run the downloaded installer (`.msi`, `.dmg`) or the extracted application/AppImage.
 5.  The required `mpv` library is bundled on Windows and macOS. **Linux users need to install `libmpv` separately** using their distribution's package manager (e.g., `sudo apt install libmpv1` on Debian/Ubuntu, `sudo pacman -S mpv` on Arch).
 
+Windows Defender may falsely think the player is a trojan virus, so if that happens don't worry it's not, I've submitted it to microsoft for review it should clear up soon.
+
 ## Usage
 
 1. Launch Alien
