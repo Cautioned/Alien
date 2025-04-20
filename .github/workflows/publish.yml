@@ -71,56 +71,64 @@ jobs:
       - name: Install/Setup mpv (macOS)
         if: startsWith(matrix.platform, 'macos-')
         run: |
-          echo "Installing mpv via Homebrew (native arch)..."
-          brew install mpv 
-          echo "Attempting to install x86_64 mpv via Rosetta..."
-          arch -x86_64 brew install mpv 
-          
           TARGET_ARCH="${{ matrix.args }}" # Get the target string
           MPV_LIB_PATH=""
           
           echo "Build target args: $TARGET_ARCH"
           
+          # Conditionally install only the required mpv architecture
           if [[ "$TARGET_ARCH" == *"aarch64-apple-darwin"* ]]; then
+            echo "Installing mpv via Homebrew (native ARM64)..."
+            brew install mpv 
             echo "Setting paths for ARM64 build..."
-            MPV_LIB_PATH="/opt/homebrew/lib" # Standard ARM Homebrew path
+            MPV_LIB_PATH="/opt/homebrew/opt/mpv/lib" # Standard ARM Homebrew path
           elif [[ "$TARGET_ARCH" == *"x86_64-apple-darwin"* ]]; then
+            echo "Attempting to install x86_64 mpv via Rosetta..."
+            arch -x86_64 brew install mpv 
             echo "Setting paths for X86_64 build..."
-            # Determine the prefix for the x86_64 install via Rosetta
-            X86_PREFIX=$(arch -x86_64 brew --prefix mpv)
-            if [ -z "$X86_PREFIX" ]; then
-              echo "::error::Failed to get Homebrew prefix for x86_64 mpv."
-              exit 1
-            fi
-            MPV_LIB_PATH="$X86_PREFIX/lib"
-            echo "Determined x86_64 mpv prefix: $X86_PREFIX"
+            # Use the standard Rosetta Homebrew path directly
+            MPV_LIB_PATH="/usr/local/Homebrew/opt/mpv/lib"
+            echo "Using expected x86_64 mpv path: $MPV_LIB_PATH"
             # --- DEBUG: Check the determined path and library --- 
             echo "Listing contents of x86_64 lib path: $MPV_LIB_PATH"
-            ls -l "$MPV_LIB_PATH"
+            ls -l "$MPV_LIB_PATH" || echo "::warning::Directory $MPV_LIB_PATH not found or couldn't be listed."
             echo "Checking architecture of libmpv.dylib in $MPV_LIB_PATH"
             file "$MPV_LIB_PATH/libmpv.dylib" || echo "::warning::libmpv.dylib not found at $MPV_LIB_PATH/libmpv.dylib"
             file "$MPV_LIB_PATH/libmpv.2.dylib" || echo "::warning::libmpv.2.dylib not found at $MPV_LIB_PATH/libmpv.2.dylib"
             # --- END DEBUG --- 
           else
-            echo "::warning::Could not determine MPV lib path for target $TARGET_ARCH. Using native path."
-            MPV_LIB_PATH="$(brew --prefix mpv)/lib"
+            echo "::error::Unsupported macOS target architecture: $TARGET_ARCH. Cannot determine which mpv to install."
+            exit 1
+            # echo "::warning::Could not determine MPV lib path for target $TARGET_ARCH. Defaulting to native path."
+            # MPV_LIB_PATH="$(brew --prefix mpv)/lib"
           fi
           
           echo "Attempting to use MPV library path: $MPV_LIB_PATH"
           
+          # Check if the determined directory exists
           if [ -z "$MPV_LIB_PATH" ] || [ ! -d "$MPV_LIB_PATH" ]; then
-            echo "::error::Failed to determine or find valid MPV library path: $MPV_LIB_PATH for target $TARGET_ARCH"
-            echo "Listing /opt/homebrew/lib..."
-            ls -l /opt/homebrew/lib || true # List contents for debugging
-            echo "Listing resolved x86_64 path ($MPV_LIB_PATH)..."
-            ls -l "$MPV_LIB_PATH" || true  # List contents for debugging
+            echo "::error::MPV library directory not found: $MPV_LIB_PATH for target $TARGET_ARCH"
+            # Add more specific debug listings based on target
+            if [[ "$TARGET_ARCH" == *"aarch64-apple-darwin"* ]]; then
+              echo "Listing /opt/homebrew/opt/mpv/lib..."
+              ls -l /opt/homebrew/opt/mpv/lib || true
+            elif [[ "$TARGET_ARCH" == *"x86_64-apple-darwin"* ]]; then
+              echo "Listing /usr/local/Homebrew/opt/mpv/lib..."
+              ls -l /usr/local/Homebrew/opt/mpv/lib || true
+            fi
+            exit 1
+          fi
+          
+          # Check if the library file itself exists (added check)
+          if [ ! -f "$MPV_LIB_PATH/libmpv.dylib" ] && [ ! -f "$MPV_LIB_PATH/libmpv.2.dylib" ]; then
+            echo "::error::libmpv.dylib or libmpv.2.dylib not found in $MPV_LIB_PATH"
             exit 1
           fi
           
           echo "Using MPV library path: $MPV_LIB_PATH"
           echo "Adding linker search path: $MPV_LIB_PATH"
           # Quote the path in RUSTFLAGS in case it contains spaces
-          echo "RUSTFLAGS=-L "$MPV_LIB_PATH"" >> $GITHUB_ENV
+          echo "RUSTFLAGS=-L \"$MPV_LIB_PATH\"" >> $GITHUB_ENV
           echo "LIBMPV_LIB_DIR=$MPV_LIB_PATH" >> $GITHUB_ENV
 
       - name: Download libmpv-2.dll (Windows)
