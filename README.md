@@ -15,7 +15,7 @@ A video synchronization tool for animation reference on Roblox Studio. This tool
 2.  Scroll down to the **Assets** section.
 3.  Download the correct file for your operating system and architecture:
     *   **Windows:** Look for the .exe file (e.g., `Alien_x.y.z_x64.exe`) or alternatively, download the .msi file (e.g., `Alien_x.y.z_x64.msi`).
-    *   **macOS (Apple Silicon/ARM):** Look for the `_aarch64.dmg` file (e.g., `Alien_x.y.z_aarch64.dmg`).
+    *   **macOS (Apple Silicon/ARM):** Look for the `_aarch64.dmg` file (e.g., `Alien_x.y.z_aarch64.dmg`). Apple will not let you run it by default, to do this go to System Settings > Privacy & Security, and then click "Open Anyway".
     *   **macOS (Intel):** Look for the `_x64.dmg` file (e.g., `Alien_x.y.z_x64.dmg`).
     *   _(macOS Alternative): If a `.dmg` is not available for your architecture, look for the corresponding `.app.tar.gz` file and extract it._
     *   **Linux:** Look for the `.AppImage` or `.deb` file.
