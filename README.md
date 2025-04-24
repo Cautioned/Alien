@@ -24,6 +24,8 @@ A video synchronization tool for animation reference on Roblox Studio. This tool
 
 Windows Defender may falsely think the player is a trojan virus, so if that happens don't worry it's not, I've submitted it to microsoft for review it should clear up soon.
 
+macOS currently doesn't work I need to setup Apple Developer for it.
+
 ## Usage
 
 1. Launch Alien
