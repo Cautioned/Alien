@@ -234,6 +234,6 @@ jobs:
         uses: actions/attest-build-provenance@v2 # Use specific version v2.2.3 or check for latest
         with:
           subject-path: |
-            src-tauri/target/release/bundle/**/*.{dmg,app,msi,exe,deb,AppImage}
+            src-tauri/target/release/bundle/*/*.{dmg,app,msi,exe,deb,AppImage}
             src-tauri/target/release/*.json
         
