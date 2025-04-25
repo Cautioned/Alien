@@ -12,6 +12,8 @@ jobs:
   publish-tauri:
     permissions:
       contents: write
+      id-token: write # Required for Sigstore OIDC token
+      attestations: write # Required to save attestations
     strategy:
       fail-fast: false
       matrix:
@@ -228,3 +230,10 @@ jobs:
           includeUpdaterJson: true
           args: ${{ matrix.args }}
           # Note: Assumes `libmpv-2.dll` in `src-tauri/resources` (tauri.conf.json) is sufficient for bundling on Windows. 
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@v2 # Use specific version v2.2.3 or check for latest
+        with:
+          subject-path: |
+            src-tauri/target/release/bundle/**/*.{dmg,app,msi,exe,deb,AppImage}
+            src-tauri/target/release/*.json
+        
