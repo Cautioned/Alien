@@ -205,7 +205,7 @@ jobs:
       # === End MPV/Linker Setup ===
 
       # === Tauri Build and Release (Single Step) ===
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v2
         id: tauri_build # Add an ID to reference outputs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
