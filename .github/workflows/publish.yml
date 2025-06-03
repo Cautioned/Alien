@@ -204,8 +204,52 @@ jobs:
 
       # === End MPV/Linker Setup ===
 
+      # === Prepare Linux AppDir ===
+      - name: Prepare Linux AppDir
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          echo "Running preparation for Linux AppDir..."
+          # Find the path to libmpv.so.2.x.y on the runner
+          # Using -L to resolve symlinks and find the real file
+          MPV_SO_RUNNER_PATH=$(ls -L /usr/lib/x86_64-linux-gnu/libmpv.so.2* | head -n 1)
+          echo "::debug::Found system MPV SO: $MPV_SO_RUNNER_PATH"
+
+          # Define the AppDir path relative to src-tauri
+          APPDIR_PATH="target/x86_64-unknown-linux-gnu/release/bundle/appimage/Alien.AppDir/"
+          APPDIR_LIB_PATH="$APPDIR_PATH/usr/lib/"
+
+          # Create the target directory inside AppDir if it doesn't exist
+          mkdir -p "$APPDIR_LIB_PATH"
+          echo "::debug::Created AppDir lib directory: $APPDIR_LIB_PATH"
+
+          # Copy the correct libmpv.so.2.x.y into the AppDir
+          if [ -f "$MPV_SO_RUNNER_PATH" ]; then
+            echo "::debug::Copying $MPV_SO_RUNNER_PATH to $APPDIR_LIB_PATH"
+            cp "$MPV_SO_RUNNER_PATH" "$APPDIR_LIB_PATH"
+
+            # Get the base name of the copied file (e.g., libmpv.so.2.1.0)
+            MPV_SO_BASENAME=$(basename "$MPV_SO_RUNNER_PATH")
+            echo "::debug::Copied $MPV_SO_BASENAME to AppDir"
+
+            # Create symlinks libmpv.so and libmpv.so.2 pointing to the copied file
+            # Use relative paths for symlinks within the AppDir
+            echo "::debug::Creating symlinks in $APPDIR_LIB_PATH"
+            (cd "$APPDIR_LIB_PATH" && ln -sf "$MPV_SO_BASENAME" libmpv.so)
+            (cd "$APPDIR_LIB_PATH" && ln -sf "$MPV_SO_BASENAME" libmpv.so.2)
+            echo "::debug::Symlinks created: $(ls -l $APPDIR_LIB_PATH/libmpv.so*)"
+
+
+            # Remove any libmpv.so.1 files that might have been incorrectly bundled
+            find "$APPDIR_LIB_PATH" -name "libmpv.so.1*" -delete
+            echo "::debug::Removed any libmpv.so.1 files from AppDir."
+
+          else
+            echo "::error::Correct libmpv.so.2.x.y not found on runner. AppImage build may fail."
+            exit 1
+          fi
+
       # === Tauri Build and Release (Single Step) ===
-      - uses: tauri-apps/tauri-action@v2
+      - uses: tauri-apps/tauri-action@v0
         id: tauri_build # Add an ID to reference outputs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -230,49 +274,6 @@ jobs:
           prerelease: false # Set to true if releasing pre-releases.
           includeUpdaterJson: true
           args: ${{ matrix.args }}
-          beforePackagingCommand: |
-            if [ "${{ matrix.platform }}" == "ubuntu-22.04" ]; then
-              echo "Running beforePackagingCommand for Linux..."
-              # Find the path to libmpv.so.2.x.y on the runner
-              # Using -L to resolve symlinks and find the real file
-              MPV_SO_RUNNER_PATH=$(ls -L /usr/lib/x86_64-linux-gnu/libmpv.so.2* | head -n 1)
-              echo "::debug::Found system MPV SO: $MPV_SO_RUNNER_PATH"
-
-              # Define the AppDir path relative to src-tauri
-              APPDIR_PATH="target/x86_64-unknown-linux-gnu/release/bundle/appimage/Alien.AppDir/"
-              APPDIR_LIB_PATH="$APPDIR_PATH/usr/lib/"
-
-              # Create the target directory inside AppDir if it doesn't exist
-              mkdir -p "$APPDIR_LIB_PATH"
-              echo "::debug::Created AppDir lib directory: $APPDIR_LIB_PATH"
-
-              # Copy the correct libmpv.so.2.x.y into the AppDir
-              if [ -f "$MPV_SO_RUNNER_PATH" ]; then
-                echo "::debug::Copying $MPV_SO_RUNNER_PATH to $APPDIR_LIB_PATH"
-                cp "$MPV_SO_RUNNER_PATH" "$APPDIR_LIB_PATH"
-
-                # Get the base name of the copied file (e.g., libmpv.so.2.1.0)
-                MPV_SO_BASENAME=$(basename "$MPV_SO_RUNNER_PATH")
-                echo "::debug::Copied $MPV_SO_BASENAME to AppDir"
-
-                # Create symlinks libmpv.so and libmpv.so.2 pointing to the copied file
-                # Use relative paths for symlinks within the AppDir
-                echo "::debug::Creating symlinks in $APPDIR_LIB_PATH"
-                (cd "$APPDIR_LIB_PATH" && ln -sf "$MPV_SO_BASENAME" libmpv.so)
-                (cd "$APPDIR_LIB_PATH" && ln -sf "$MPV_SO_BASENAME" libmpv.so.2)
-                echo "::debug::Symlinks created: $(ls -l $APPDIR_LIB_PATH/libmpv.so*)"
-
-
-                # Remove any libmpv.so.1 files that might have been incorrectly bundled
-                find "$APPDIR_LIB_PATH" -name "libmpv.so.1*" -delete
-                echo "::debug::Removed any libmpv.so.1 files from AppDir."
-
-              else
-                echo "::error::Correct libmpv.so.2.x.y not found on runner. AppImage build may fail."
-                exit 1
-              fi
-            fi
-          # Note: Assumes `libmpv-2.dll` in `src-tauri/resources` (tauri.conf.json) is sufficient for bundling on Windows.
       - name: Attest Build Provenance
         uses: actions/attest-build-provenance@v2 # Use specific version v2.2.3 or check for latest
         with:
