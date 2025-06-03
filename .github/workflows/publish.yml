@@ -22,8 +22,6 @@ jobs:
             args: '--target aarch64-apple-darwin'
           - platform: 'macos-latest' # for Intel based macs.
             args: '--target x86_64-apple-darwin'
-          - platform: 'ubuntu-22.04' # for Tauri v2.
-            args: ''
           - platform: 'windows-latest'
             args: ''
 
@@ -48,6 +46,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libmpv-dev
         # webkitgtk 4.1 is for Tauri v2.
+
+      # === Find libmpv.so.2 (ubuntu only) ===
+      - name: Find libmpv.so.2
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          echo "Searching for libmpv.so.2..."
+          # Search common library directories
+          find /usr/lib /usr/local/lib -name 'libmpv.so.2*' 2>/dev/null || echo "libmpv.so.2 not found in common dirs."
 
       # === End Platform Dependencies ===
 
