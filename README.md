@@ -1,5 +1,7 @@
 # Alien
 
+⚠️**CURRENTLY OUTDATED, USE THIS FORK**: https://github.com/kitsunetix/Alienor
+
 A video synchronization tool for animation reference on Roblox Studio. This tool allows you to sync video playback across multiple instances, making it easier to work on animations with reference videos. Currently, only Moon Animator is supported.
 
 ## Features
